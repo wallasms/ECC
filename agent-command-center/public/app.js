@@ -286,8 +286,16 @@ function startLive() {
 }
 function appendLiveLines(body, lines) {
   const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 70;
-  body.insertAdjacentHTML('beforeend', lines.map((e) => { const c = liveLineClass(e); return `<div class="term-line ${c} lnew"><span class="gutter">${c === 'cmd' ? '$' : ' '}</span><span>${esc(e.summary)}</span></div>`; }).join(''));
-  while (body.children.length > 400) body.removeChild(body.firstChild); // não guardar scroll infinito
+  const html = lines.map((e) => {
+    const base = liveLineClass(e);
+    return String(e.summary).split(/\n/).map((s, i) => {
+      const isCmd = /^\$ /.test(s);
+      const cls = isCmd ? 'cmd' : i === 0 ? base : base === 'cmd' ? 'out' : base;
+      return `<div class="term-line ${cls} lnew"><span class="gutter">${isCmd ? '$' : ' '}</span><span>${esc(isCmd ? s.slice(2) : s)}</span></div>`;
+    }).join('');
+  }).join('');
+  body.insertAdjacentHTML('beforeend', html);
+  while (body.children.length > 500) body.removeChild(body.firstChild); // não guardar scroll infinito
   if (nearBottom) body.scrollTop = body.scrollHeight;
 }
 

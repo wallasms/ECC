@@ -28,16 +28,67 @@ function status_por_eventos(eventos, atualizado_em) {
   return 'stale';
 }
 
+// Tipos de registro que são puro ruído de plumbing (nunca conteúdo útil).
+const RUIDO = new Set(['last-prompt', 'mode', 'permission-mode', 'file-history-snapshot',
+  'ai-title', 'system', 'queue-operation', 'started', 'attachment', 'turn_context', 'session_meta']);
+
+// Um bloco de content do Claude -> linha legível de terminal.
+function bloco_claude(b) {
+  if (!b || typeof b !== 'object') return typeof b === 'string' ? b : '';
+  switch (b.type) {
+    case 'text': return b.text || '';
+    case 'thinking': return ''; // criptografado/vazio
+    case 'image': return '[imagem]';
+    case 'tool_result': return texto(b.content) || (typeof b.content === 'string' ? b.content : '');
+    case 'tool_use': {
+      const i = b.input || {};
+      const alvo = i.command ?? i.file_path ?? i.notebook_path ?? i.pattern ?? i.url ?? i.path ?? i.query ?? i.description ?? '';
+      return `$ ${b.name || 'tool'}${alvo ? ` ${typeof alvo === 'string' ? alvo : JSON.stringify(alvo)}` : ''}`;
+    }
+    default: return '';
+  }
+}
+
+// Extrai texto legível de um registro. NUNCA faz JSON.dump (evita vazar base64/
+// conteúdo cifrado). Registros sem conteúdo útil retornam '' e são filtrados.
+function extrair_conteudo(registro, payload, role) {
+  const msg = registro?.message; // Claude: message.content (string ou blocos)
+  if (msg && (Array.isArray(msg.content) || typeof msg.content === 'string')) {
+    return typeof msg.content === 'string' ? msg.content : msg.content.map(bloco_claude).filter(Boolean).join('\n');
+  }
+  if (registro?.type === 'result' && typeof registro.result === 'string') return `↳ ${registro.result}`;
+  if (registro?.type && RUIDO.has(registro.type)) return '';
+  switch (payload?.type) { // Codex: payload.type
+    case 'message': return role === 'developer' || role === 'system' ? '' : texto(payload.content);
+    case 'user_message': case 'agent_message': return payload.message || '';
+    case 'task_complete': return payload.last_agent_message || '';
+    case 'turn_aborted': return `⛔ turn_aborted${payload.reason ? `: ${payload.reason}` : ''}`;
+    case 'custom_tool_call': return `$ ${payload.name || 'tool'}${payload.input ? `\n${payload.input}` : ''}`;
+    case 'function_call': return `$ ${payload.name || 'call'}${payload.arguments ? ` ${payload.arguments}` : ''}`;
+    case 'custom_tool_call_output': case 'function_call_output':
+      return texto(payload.output) || (typeof payload.output === 'string' ? payload.output : '');
+    case 'patch_apply_end': return `$ apply_patch${payload.stdout ? `\n${payload.stdout}` : ''}${payload.stderr ? `\n${payload.stderr}` : ''}`;
+    case 'web_search_end': return `🔍 ${payload.query || payload.action?.url || 'busca'}`;
+    case 'mcp_tool_call_end': return `$ ${payload.invocation?.server || 'mcp'}.${payload.invocation?.tool || ''}`;
+    case 'sub_agent_activity': return `↳ subagente ${payload.agent_path || ''} ${payload.kind || ''}`.trim();
+    case 'image_generation_end': return '[imagem gerada]';
+    default:
+      // fallback seguro: só campos-texto conhecidos, nunca o objeto inteiro.
+      return typeof payload?.message === 'string' ? payload.message : typeof payload?.text === 'string' ? payload.text : '';
+  }
+}
+
 export function normalizar_evento(registro, posicao) {
   const payload = registro?.payload || registro?.message || registro;
-  const role = payload?.role || registro?.role || null;
+  const role = payload?.role || registro?.role || (payload?.type === 'user_message' ? 'user' : null);
   const kind = registro?.type || payload?.type || role || 'event';
-  const content = texto(payload?.content) || payload?.message || payload?.text || payload?.name || '';
-  const summary = redigir(content || JSON.stringify(payload)).replace(/\s+/g, ' ').slice(0, 600);
+  // Preserva quebras de linha (código/output), colapsa só espaços horizontais.
+  const summary = redigir(extrair_conteudo(registro, payload, role))
+    .replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim().slice(0, 600);
   return {
     position: posicao,
     timestamp: registro?.timestamp || payload?.timestamp || null,
-    kind: String(kind), role, summary: summary || String(kind),
+    kind: String(kind), role, summary,
     raw: redigir(JSON.stringify(registro)).slice(0, 10_000)
   };
 }
