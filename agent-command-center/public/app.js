@@ -261,7 +261,8 @@ function liveTermShell(s) {
       <button class="live-btn" data-live-expand title="Expandir">⤢</button>
       <button class="live-btn" data-session-open="${esc(s.id)}" title="Abrir detalhes">${ic('expand')}</button></div>
     <div class="term-body live-body" data-offset="0"><div class="term-line out"><span class="gutter"> </span><span style="color:var(--term-dim)">conectando ao arquivo de sessão…</span></div></div>
-    <div class="live-caret"><span class="blink">▍</span>ao vivo · ${esc(b.label)}</div></div>`;
+    <button class="live-jump" data-live-jump>↓ novas linhas</button>
+    <div class="live-caret"><span class="blink">▍</span>ao vivo · ${esc(b.label)}<span class="cfresh"></span></div></div>`;
 }
 async function livePage() {
   const data = await api('/api/sessions?' + new URLSearchParams(Object.entries(filters).filter(([, v]) => v)));
@@ -275,9 +276,11 @@ async function livePage() {
 function startLive() {
   document.querySelectorAll('.live-term').forEach((panel) => {
     const id = panel.dataset.liveId; const body = panel.querySelector('.live-body');
+    const caret = panel.querySelector('.cfresh');
+    const freshness = () => { const at = Number(body.dataset.lastAt || 0); if (!at || !caret) return; const s = Math.round((Date.now() - at) / 1000); caret.textContent = s < 3 ? ' · ativo agora' : ` · última linha há ${s}s`; };
     let cleared = false;
     const poll = async () => {
-      if (LIVE.paused.has(id)) return;
+      if (LIVE.paused.has(id) || document.hidden) return; // não consome CPU em aba oculta
       try {
         const r = await api(`/api/sessions/${encodeURIComponent(id)}/tail?from=${body.dataset.offset || 0}`);
         body.dataset.offset = r.offset;
@@ -285,14 +288,19 @@ function startLive() {
         if (r.lines.length) {
           if (!cleared) { body.innerHTML = ''; cleared = true; }
           appendLiveLines(body, r.lines);
+          body.dataset.lastAt = Date.now();
         }
+        freshness();
       } catch { /* mantém tentando no próximo tick */ }
     };
     poll();
     LIVE.timers.push(setInterval(poll, 1400));
+    LIVE.timers.push(setInterval(freshness, 1000));
+    body.addEventListener('scroll', () => { if (body.scrollHeight - body.scrollTop - body.clientHeight < 40) panel.classList.remove('has-new'); });
   });
   document.querySelectorAll('[data-live-pause]').forEach((b) => { b.onclick = () => { const p = b.closest('.live-term'); const id = p.dataset.liveId; if (LIVE.paused.has(id)) { LIVE.paused.delete(id); b.textContent = '❚❚'; p.classList.remove('paused'); } else { LIVE.paused.add(id); b.textContent = '▶'; p.classList.add('paused'); } }; });
   document.querySelectorAll('[data-live-expand]').forEach((b) => { b.onclick = () => b.closest('.live-term').classList.toggle('focus'); });
+  document.querySelectorAll('[data-live-jump]').forEach((b) => { b.onclick = () => { const body = b.closest('.live-term').querySelector('.live-body'); body.scrollTop = body.scrollHeight; b.closest('.live-term').classList.remove('has-new'); }; });
 }
 function appendLiveLines(body, lines) {
   const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 70;
@@ -310,6 +318,7 @@ function appendLiveLines(body, lines) {
   body.insertAdjacentHTML('beforeend', html);
   while (body.children.length > 500) body.removeChild(body.firstChild); // não guardar scroll infinito
   if (nearBottom) body.scrollTop = body.scrollHeight;
+  else body.closest('.live-term')?.classList.add('has-new'); // usuário rolou p/ cima: avisa
 }
 
 /* ---------- generic card page ---------- */
