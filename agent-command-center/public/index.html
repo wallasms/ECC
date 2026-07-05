@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Agent Command Center</title><link rel="stylesheet" href="/styles.css"></head>
+<body>
+  <aside>
+    <header><span class="mark">A</span><div><strong>Agent Command Center</strong><small>Quiet Command</small></div></header>
+    <nav id="nav"></nav>
+    <footer><span class="dot working"></span><div><strong>Local e privado</strong><small>127.0.0.1</small></div></footer>
+  </aside>
+  <main>
+    <div class="command"><input id="command" placeholder="Pergunte ao Agent Command Center…"><button id="run-command">Executar</button></div>
+    <div id="app"><div class="skeleton"></div><div class="skeleton short"></div></div>
+  </main>
+  <dialog id="detail"><button class="close" onclick="this.closest('dialog').close()">Fechar</button><div id="detail-content"></div></dialog>
+  <script type="module" src="/app.js"></script>
+</body></html>
