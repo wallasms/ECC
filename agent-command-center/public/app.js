@@ -251,6 +251,14 @@ function diffLineClass(l) {
   if (/^-(?!--)/.test(l)) return 'del';
   return '';
 }
+// Status ao vivo a partir das linhas transmitidas (espelha status_por_eventos do backend).
+function liveStatus(texts) {
+  const j = texts.join(' ').toLowerCase();
+  if (/error|failed|exception|panic|traceback/.test(j)) return 'failed';
+  if (/waiting|needs input|approval|required user|ask user|aguard/.test(j)) return 'needs_input';
+  if (/task_complete|turn_aborted|conclu[ií]|completed/.test(j)) return 'completed';
+  return 'working';
+}
 function liveTermShell(s) {
   const b = brand(s.source);
   return `<div class="term-panel live-term rise" data-live-id="${esc(s.id)}">
@@ -277,8 +285,9 @@ function startLive() {
   document.querySelectorAll('.live-term').forEach((panel) => {
     const id = panel.dataset.liveId; const body = panel.querySelector('.live-body');
     const caret = panel.querySelector('.cfresh');
+    const dot = panel.querySelector('.term-src .st');
     const freshness = () => { const at = Number(body.dataset.lastAt || 0); if (!at || !caret) return; const s = Math.round((Date.now() - at) / 1000); caret.textContent = s < 3 ? ' · ativo agora' : ` · última linha há ${s}s`; };
-    let cleared = false;
+    let cleared = false; let recent = [];
     const poll = async () => {
       if (LIVE.paused.has(id) || document.hidden) return; // não consome CPU em aba oculta
       try {
@@ -289,6 +298,9 @@ function startLive() {
           if (!cleared) { body.innerHTML = ''; cleared = true; }
           appendLiveLines(body, r.lines);
           body.dataset.lastAt = Date.now();
+          recent = recent.concat(r.lines.map((l) => l.summary)).slice(-25);
+          const st = liveStatus(recent); // recomputa status ao vivo, sem esperar rescan
+          if (dot && !dot.classList.contains(st)) dot.className = 'st ' + st;
         }
         freshness();
       } catch { /* mantém tentando no próximo tick */ }
