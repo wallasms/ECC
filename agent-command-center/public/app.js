@@ -241,6 +241,16 @@ function liveLineClass(e) {
   if (/complete|done|finish/.test(h)) return 'ok';
   return 'out';
 }
+// Diff/patch detection — only colorize +/- when the event is actually a patch,
+// so prose bullets starting with "-" don't turn red.
+const isDiff = (s) => /(^|\n)(\*\*\* (Begin Patch|Add File|Update File|Delete File|End Patch)|@@ )/.test(s) || /^\$ (apply_patch|Edit|MultiEdit|Write)\b/.test(s);
+function diffLineClass(l) {
+  if (/^@@/.test(l)) return 'hunk';
+  if (/^\*\*\* /.test(l)) return 'phdr';
+  if (/^\+(?!\+\+)/.test(l)) return 'add';
+  if (/^-(?!--)/.test(l)) return 'del';
+  return '';
+}
 function liveTermShell(s) {
   const b = brand(s.source);
   return `<div class="term-panel live-term rise" data-live-id="${esc(s.id)}">
@@ -288,10 +298,13 @@ function appendLiveLines(body, lines) {
   const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 70;
   const html = lines.map((e) => {
     const base = liveLineClass(e);
+    const diff = isDiff(e.summary);
     return String(e.summary).split(/\n/).map((s, i) => {
       const isCmd = /^\$ /.test(s);
-      const cls = isCmd ? 'cmd' : i === 0 ? base : base === 'cmd' ? 'out' : base;
-      return `<div class="term-line ${cls} lnew"><span class="gutter">${isCmd ? '$' : ' '}</span><span>${esc(isCmd ? s.slice(2) : s)}</span></div>`;
+      const dc = diff ? diffLineClass(s) : '';
+      const cls = dc || (isCmd ? 'cmd' : i === 0 ? base : base === 'cmd' ? 'out' : base);
+      const gutter = dc === 'add' ? '+' : dc === 'del' ? '-' : isCmd ? '$' : ' ';
+      return `<div class="term-line ${cls} lnew"><span class="gutter">${gutter}</span><span>${esc(isCmd ? s.slice(2) : s)}</span></div>`;
     }).join('');
   }).join('');
   body.insertAdjacentHTML('beforeend', html);
@@ -375,12 +388,17 @@ function designSystem() {
 
 /* ---------- Timeline event ---------- */
 const EVENT_KIND = [[/error|fail|exception|panic/i, 'k-error', 'alert', 'Erro'], [/complete|done|abort|finish/i, 'k-complete', 'check', 'Concluído'], [/user|prompt/i, 'k-user', 'chat', 'Prompt'], [/bash|shell|exec|command|term/i, 'k-term', 'terminal', 'Terminal'], [/tool|function_call|apply_patch|patch/i, 'k-tool', 'tool', 'Tool'], [/hook/i, 'k-hook', 'hooks', 'Hook'], [/skill/i, 'k-skill', 'book', 'Skill'], [/subagent|agent/i, 'k-agent', 'agents', 'Subagente'], [/assistant|message|response/i, 'k-assistant', 'spark', 'Resposta']];
+function eventBody(summary) {
+  if (!isDiff(summary)) return `<pre>${esc(summary)}</pre>`;
+  const body = String(summary).split(/\n/).map((l) => { const dc = diffLineClass(l); return `<span class="dl${dc ? ' ' + dc : ''}">${esc(l) || ' '}</span>`; }).join('');
+  return `<pre class="diff">${body}</pre>`;
+}
 function timelineEvent(e) {
   const hay = `${e.kind} ${e.role || ''}`;
   const [, cls, glyph, label] = EVENT_KIND.find(([re]) => re.test(hay)) || [, 'k-event', 'chevron', e.kind];
   return `<div class="event ${cls}" data-kind="${esc(e.kind)}"><span class="ev-icon">${ic(glyph)}</span>
     <div class="ev-head"><b>${esc(label)}</b>${e.role ? `<span class="role">· ${esc(e.role)}</span>` : ''}${e.timestamp ? `<small>${fmt(e.timestamp)}</small>` : ''}</div>
-    <pre>${esc(e.summary)}</pre></div>`;
+    ${eventBody(e.summary)}</div>`;
 }
 
 /* ---------- render ---------- */

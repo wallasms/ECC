@@ -331,6 +331,18 @@ h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;
 .live-term.paused{opacity:.72}
 .live-body{max-height:320px;min-height:190px;scroll-behavior:smooth}
 .term-line.usr{color:var(--term-accent)}
+/* diff/patch coloring — dark terminal */
+.term-line.add{color:var(--term-green);background:color-mix(in srgb,var(--term-green) 10%,transparent)}
+.term-line.del{color:var(--term-red);background:color-mix(in srgb,var(--term-red) 10%,transparent)}
+.term-line.add .gutter{color:var(--term-green)}.term-line.del .gutter{color:var(--term-red)}
+.term-line.hunk{color:var(--term-accent)}.term-line.phdr{color:var(--term-amber)}
+/* diff/patch coloring — light timeline <pre> */
+pre.diff{display:flex;flex-direction:column}
+pre.diff .dl{display:block;padding:0 4px;border-radius:2px}
+pre.diff .dl.add{color:var(--ok-fg);background:var(--ok-bg)}
+pre.diff .dl.del{color:var(--danger-fg);background:var(--danger-bg)}
+pre.diff .dl.hunk{color:var(--accent);font-weight:600}
+pre.diff .dl.phdr{color:var(--warn-fg);font-weight:600}
 .term-line.lnew{animation:lnew .28s ease}
 @keyframes lnew{from{opacity:0;transform:translateY(2px)}}
 .live-btn{flex:none;border:1px solid var(--term-border);background:transparent;color:var(--term-dim);border-radius:6px;width:26px;height:22px;display:grid;place-items:center;cursor:pointer;font-size:11px;padding:0;transition:color .12s,border-color .12s}

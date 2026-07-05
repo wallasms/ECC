@@ -32,6 +32,11 @@ function status_por_eventos(eventos, atualizado_em) {
 const RUIDO = new Set(['last-prompt', 'mode', 'permission-mode', 'file-history-snapshot',
   'ai-title', 'system', 'queue-operation', 'started', 'attachment', 'turn_context', 'session_meta']);
 
+// Prefixa cada linha de um bloco com '+'/'-' para renderizar como diff. Cap p/ não estourar.
+function linhas_diff(txt, sinal) {
+  return String(txt).split(/\r?\n/).slice(0, 40).map((l) => sinal + l).join('\n');
+}
+
 // Um bloco de content do Claude -> linha legível de terminal.
 function bloco_claude(b) {
   if (!b || typeof b !== 'object') return typeof b === 'string' ? b : '';
@@ -42,8 +47,13 @@ function bloco_claude(b) {
     case 'tool_result': return texto(b.content) || (typeof b.content === 'string' ? b.content : '');
     case 'tool_use': {
       const i = b.input || {};
+      const nome = b.name || 'tool';
+      if ((nome === 'Edit' || nome === 'MultiEdit') && typeof i.old_string === 'string' && typeof i.new_string === 'string') {
+        return `$ Edit ${i.file_path || ''}\n${linhas_diff(i.old_string, '-')}\n${linhas_diff(i.new_string, '+')}`;
+      }
+      if (nome === 'Write' && typeof i.content === 'string') return `$ Write ${i.file_path || ''}\n${linhas_diff(i.content, '+')}`;
       const alvo = i.command ?? i.file_path ?? i.notebook_path ?? i.pattern ?? i.url ?? i.path ?? i.query ?? i.description ?? '';
-      return `$ ${b.name || 'tool'}${alvo ? ` ${typeof alvo === 'string' ? alvo : JSON.stringify(alvo)}` : ''}`;
+      return `$ ${nome}${alvo ? ` ${typeof alvo === 'string' ? alvo : JSON.stringify(alvo)}` : ''}`;
     }
     default: return '';
   }
@@ -64,7 +74,11 @@ function extrair_conteudo(registro, payload, role) {
     case 'task_complete': return payload.last_agent_message || '';
     case 'turn_aborted': return `⛔ turn_aborted${payload.reason ? `: ${payload.reason}` : ''}`;
     case 'custom_tool_call': return `$ ${payload.name || 'tool'}${payload.input ? `\n${payload.input}` : ''}`;
-    case 'function_call': return `$ ${payload.name || 'call'}${payload.arguments ? ` ${payload.arguments}` : ''}`;
+    case 'function_call': {
+      let args = payload.arguments; // string JSON — extrai o campo real p/ recuperar as quebras de linha do patch
+      try { const o = JSON.parse(args); args = o.input ?? o.command ?? o.patch ?? o.code ?? o.file_path ?? JSON.stringify(o); } catch { /* mantém string bruta */ }
+      return `$ ${payload.name || 'call'}${args ? `\n${args}` : ''}`;
+    }
     case 'custom_tool_call_output': case 'function_call_output':
       return texto(payload.output) || (typeof payload.output === 'string' ? payload.output : '');
     case 'patch_apply_end': return `$ apply_patch${payload.stdout ? `\n${payload.stdout}` : ''}${payload.stderr ? `\n${payload.stderr}` : ''}`;
@@ -83,8 +97,10 @@ export function normalizar_evento(registro, posicao) {
   const role = payload?.role || registro?.role || (payload?.type === 'user_message' ? 'user' : null);
   const kind = registro?.type || payload?.type || role || 'event';
   // Preserva quebras de linha (código/output), colapsa só espaços horizontais.
-  const summary = redigir(extrair_conteudo(registro, payload, role))
-    .replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim().slice(0, 600);
+  const bruto = redigir(extrair_conteudo(registro, payload, role)).replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  // Patches, diffs e comandos ganham mais espaço para mostrar o código; prosa fica enxuta.
+  const limite = /(\*\*\* (Begin Patch|Update File|Add File|Delete File)|\n@@ |^\$ )/.test(bruto) ? 2200 : 600;
+  const summary = bruto.slice(0, limite);
   return {
     position: posicao,
     timestamp: registro?.timestamp || payload?.timestamp || null,
