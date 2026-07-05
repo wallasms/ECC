@@ -1,3 +1,5 @@
+const setTheme=(t)=>{document.documentElement.dataset.theme=t;try{localStorage.setItem('acc-theme',t)}catch{}};
+setTheme((()=>{try{return localStorage.getItem('acc-theme')}catch{return null}})()||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'));
 const pages=['Dashboard','Sessions','Projects','Skills Finder','Hooks','Multiagents','Prompt Queue','Settings'];
 const ids=['dashboard','sessions','projects','skills','hooks','agents','prompts','settings'];
 let page='dashboard'; let filters={}; let gen=0;
@@ -57,4 +59,6 @@ async function detail(id){try{const s=await api('/api/sessions/'+encodeURICompon
   $('#detail').showModal()}catch(e){alert(e.message)}}
 $('#run-command').onclick=async()=>{const r=await api('/api/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:$('#command').value})});const f=r.filters||{};if(r.query)f.q=r.query;goto(r.page||'sessions',f)};$('#command').onkeydown=e=>{if(e.key==='Enter')$('#run-command').click()};
 window.addEventListener('hashchange',()=>{readHash();render()});render();
+$('#theme').onclick=()=>setTheme(document.documentElement.dataset.theme==='dark'?'light':'dark');
+addEventListener('keydown',e=>{if(e.key==='/'&&!/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName||'')){e.preventDefault();$('#command').focus()}});
 setInterval(()=>{if((page==='dashboard'||page==='sessions')&&!$('#detail').open&&!$('#scan')?.disabled&&!/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName||''))render(true)},30000);
