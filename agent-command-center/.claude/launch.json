@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "acc-preview", "runtimeExecutable": "node", "runtimeArgs": ["src/server.js"], "autoPort": true, "port": 4312 }
+  ]
+}

@@ -10,7 +10,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = process.env.ACC_DATA || join(ROOT, 'data');
 const SETTINGS_PATH = join(DATA, 'settings.json');
 const PUBLIC = join(ROOT, 'public');
-const PORT = Number(process.env.ACC_PORT || 4310);
+const PORT = Number(process.env.ACC_PORT || process.env.PORT || 4310);
 const HOST = '127.0.0.1';
 
 const default_settings = {
