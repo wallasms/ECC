@@ -42,12 +42,12 @@ const ICONS = {
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   folderOpen: '<path d="M4 8V6a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2H6l-2 10a1 1 0 0 0 1 1h13l2-8H6"/>',
 };
-const ic = (n, c = '') => `<svg${c ? ` class="${c}"` : ''} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ''}</svg>`;
-const icf = (n) => `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${ICONS[n] || ''}</svg>`;
+const ic = (n, c = '') => `<svg${c ? ` class="${c}"` : ''} width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ''}</svg>`;
+const icf = (n) => `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${ICONS[n] || ''}</svg>`;
 
 /* ---------- routing ---------- */
 const nav = [
-  ['Dashboard', 'dashboard', 'dashboard'], ['Studio', 'studio', 'studio'], ['Sessions', 'sessions', 'sessions'],
+  ['Dashboard', 'dashboard', 'dashboard'], ['Ao Vivo', 'live', 'terminal'], ['Studio', 'studio', 'studio'], ['Sessions', 'sessions', 'sessions'],
   ['Projects', 'projects', 'projects'], ['Skills Finder', 'skills', 'skills'], ['Hooks', 'hooks', 'hooks'],
   ['Multiagents', 'agents', 'agents'], ['Prompt Queue', 'prompts', 'prompts'], ['Design System', 'design', 'design'],
   ['Settings', 'settings', 'settings'],
@@ -197,7 +197,7 @@ async function dashboard() {
   const stats = `<div class="stats">${cards.map(([k, v, a, i, f]) => `<div class="stat${f ? ' clickable' : ''}"${a ? ` style="--stat-accent:var(${a})"` : ''}${f ? ` data-goto-sessions='${JSON.stringify(f)}' tabindex="0" role="button"` : ''}>
     <div class="stat-top">${ic(i)}<span class="lbl">${k}</span></div><b>${v}</b></div>`).join('')}</div>`;
   const live = d.recent.filter((s) => s.status === 'working' || s.status === 'needs_input').slice(0, 3);
-  const strip = live.length ? `<div class="section-head"><h2>Terminais ativos</h2><button class="link-btn" data-goto="studio">Abrir Studio →</button></div>
+  const strip = live.length ? `<div class="section-head"><h2>Terminais ativos</h2><button class="link-btn" data-goto="live">Ver ao vivo →</button></div>
     <div class="term-strip">${live.map((s) => terminalPreview(s)).join('')}</div>` : '';
   const canvasPrev = `<div class="section-head"><h2>Agent Canvas</h2><button class="link-btn" data-goto="studio">Ver tudo →</button></div>${agentCanvas(d.recent)}`;
   const attention = `<section><h2>Precisa de atenção</h2><div class="surface attention">${d.attention.length
@@ -227,6 +227,68 @@ async function studio() {
   const terminals = live.length ? `<h2>Terminais ao vivo</h2><div class="term-strip">${live.map((s) => terminalPreview(s)).join('')}</div>` : '';
   return shell('Studio', 'Orquestre seus agentes: canvas de sessões, terminais ao vivo e fila de prompts.',
     `${agentCanvas(data)}${terminals}<div class="section-head"><h2>Fila de prompts</h2><button class="link-btn" data-goto="prompts">Gerenciar →</button></div><div id="studio-queue" class="muted">carregando…</div>`);
+}
+
+/* ---------- Ao Vivo: real-time terminal wall ----------
+   Tails the actual session .jsonl files as agents append to them, via
+   /api/sessions/:id/tail?from=<offset>. Real data, redacted server-side. */
+const LIVE = { timers: [], paused: new Set(), stop() { this.timers.forEach(clearInterval); this.timers = []; this.paused.clear(); } };
+function liveLineClass(e) {
+  const h = `${e.kind} ${e.role || ''}`.toLowerCase();
+  if (/error|fail|exception|panic|traceback/.test(h)) return 'err';
+  if (/tool|function_call|apply_patch|patch|bash|shell|exec|command/.test(h)) return 'cmd';
+  if (/user/.test(h)) return 'usr';
+  if (/complete|done|finish/.test(h)) return 'ok';
+  return 'out';
+}
+function liveTermShell(s) {
+  const b = brand(s.source);
+  return `<div class="term-panel live-term rise" data-live-id="${esc(s.id)}">
+    <div class="term-head"><span class="term-dots"><i></i><i></i><i></i></span>
+      <span class="term-title">${ic('terminal')}<code>${esc(s.project || s.title || s.id)}</code></span>
+      <span class="term-src"><span class="st ${esc(s.status)}"></span>${esc(b.label)}${s.model ? ` · ${esc(s.model)}` : ''}</span>
+      <button class="live-btn" data-live-pause title="Pausar/continuar">❚❚</button>
+      <button class="live-btn" data-live-expand title="Expandir">⤢</button>
+      <button class="live-btn" data-session-open="${esc(s.id)}" title="Abrir detalhes">${ic('expand')}</button></div>
+    <div class="term-body live-body" data-offset="0"><div class="term-line out"><span class="gutter"> </span><span style="color:var(--term-dim)">conectando ao arquivo de sessão…</span></div></div>
+    <div class="live-caret"><span class="blink">▍</span>ao vivo · ${esc(b.label)}</div></div>`;
+}
+async function livePage() {
+  const data = await api('/api/sessions?' + new URLSearchParams(Object.entries(filters).filter(([, v]) => v)));
+  const rank = { working: 0, needs_input: 1, stale: 2, unknown: 3, completed: 4, failed: 5 };
+  const list = [...data].sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || (b.updated_at > a.updated_at ? 1 : -1)).slice(0, 6);
+  const seg = (val, label, glyph) => `<button class="${(filters.source || '') === val ? 'on' : ''}" data-source="${val}">${glyph ? ic(glyph) : ''}${label}</button>`;
+  const toolbar = `<div class="toolbar"><div class="segmented">${seg('', 'Todos')}${seg('claude', 'Claude', 'spark')}${seg('codex', 'Codex', 'chevron')}</div><span class="muted" style="margin-left:4px">${ic('alert')} Lido direto dos arquivos de sessão — stdout/stderr brutos não são capturados; o fluxo mostra prompts, respostas, tools e edições conforme o agente escreve.</span></div>`;
+  const wall = list.length ? `<div class="live-wall">${list.map(liveTermShell).join('')}</div>` : emptyState('terminal', 'Nenhuma sessão para acompanhar', 'Nenhuma sessão indexada ainda. Reescaneie no Dashboard para indexar sessões locais.');
+  return shell('Ao Vivo', 'Saída dos terminais em tempo real — as telas descem conforme os agentes trabalham.', `${toolbar}${wall}`);
+}
+function startLive() {
+  document.querySelectorAll('.live-term').forEach((panel) => {
+    const id = panel.dataset.liveId; const body = panel.querySelector('.live-body');
+    let cleared = false;
+    const poll = async () => {
+      if (LIVE.paused.has(id)) return;
+      try {
+        const r = await api(`/api/sessions/${encodeURIComponent(id)}/tail?from=${body.dataset.offset || 0}`);
+        body.dataset.offset = r.offset;
+        if (r.missing && !cleared) { body.innerHTML = '<div class="term-line err"><span class="gutter">!</span><span>arquivo de sessão não encontrado</span></div>'; cleared = true; return; }
+        if (r.lines.length) {
+          if (!cleared) { body.innerHTML = ''; cleared = true; }
+          appendLiveLines(body, r.lines);
+        }
+      } catch { /* mantém tentando no próximo tick */ }
+    };
+    poll();
+    LIVE.timers.push(setInterval(poll, 1400));
+  });
+  document.querySelectorAll('[data-live-pause]').forEach((b) => { b.onclick = () => { const p = b.closest('.live-term'); const id = p.dataset.liveId; if (LIVE.paused.has(id)) { LIVE.paused.delete(id); b.textContent = '❚❚'; p.classList.remove('paused'); } else { LIVE.paused.add(id); b.textContent = '▶'; p.classList.add('paused'); } }; });
+  document.querySelectorAll('[data-live-expand]').forEach((b) => { b.onclick = () => b.closest('.live-term').classList.toggle('focus'); });
+}
+function appendLiveLines(body, lines) {
+  const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 70;
+  body.insertAdjacentHTML('beforeend', lines.map((e) => { const c = liveLineClass(e); return `<div class="term-line ${c} lnew"><span class="gutter">${c === 'cmd' ? '$' : ' '}</span><span>${esc(e.summary)}</span></div>`; }).join(''));
+  while (body.children.length > 400) body.removeChild(body.firstChild); // não guardar scroll infinito
+  if (nearBottom) body.scrollTop = body.scrollHeight;
 }
 
 /* ---------- generic card page ---------- */
@@ -316,11 +378,13 @@ function timelineEvent(e) {
 /* ---------- render ---------- */
 async function render(quiet) {
   const g = ++gen;
+  LIVE.stop();
   document.querySelectorAll('.nav').forEach((b) => b.classList.toggle('active', b.dataset.page === page));
   if (!quiet) $('#app').innerHTML = '<div class="skeleton"></div><div class="skeleton tall"></div>';
   try {
     let html;
     if (page === 'dashboard') html = await dashboard();
+    else if (page === 'live') html = await livePage();
     else if (page === 'studio') html = await studio();
     else if (page === 'sessions') html = await sessions();
     else if (page === 'projects') html = await cardPage('/api/projects', 'Projetos', 'Sessões agrupadas por repositório.', projectCard);
@@ -356,6 +420,7 @@ function bind() {
   $('#prompt-form')?.addEventListener('submit', async (e) => { e.preventDefault(); await api('/api/prompts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.fromEntries(new FormData(e.target))) }); render(); });
   $('#settings-form')?.addEventListener('submit', async (e) => { e.preventDefault(); const d = Object.fromEntries(new FormData(e.target)); const current = await api('/api/settings'); current.session_paths = { codex: d.codex.split('\n').filter(Boolean), claude: d.claude.split('\n').filter(Boolean) }; await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(current) }); render(); });
   if (page === 'studio') loadStudioQueue();
+  if (page === 'live') startLive();
 }
 function copy(text, btn) { navigator.clipboard?.writeText(text).then(() => { if (!btn) return; const o = btn.innerHTML; btn.innerHTML = ic('check') + 'Copiado'; setTimeout(() => { btn.innerHTML = o; }, 1200); }).catch(() => {}); }
 async function loadStudioQueue() { try { const q = await api('/api/prompts'); const el = $('#studio-queue'); if (el) el.outerHTML = q.length ? `<div class="cards">${q.slice(0, 6).map(promptCard).join('')}</div>` : `<div class="surface">${emptyState('prompts', 'Fila vazia', 'Adicione prompts na Prompt Queue.')}</div>`; } catch {} }

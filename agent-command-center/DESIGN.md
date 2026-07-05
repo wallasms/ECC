@@ -105,6 +105,12 @@ Glass is a **progressive enhancement layer**, CSS-first.
   activity; otherwise show "Nenhuma saída de terminal detectada ainda."
 - Never fabricate terminal output. Sample output appears only in explicit
   demo/sample mode and is labeled.
+- **Ao Vivo (live wall):** the `GET /api/sessions/:id/tail?from=<offset>`
+  endpoint reads only the new bytes appended to the real session `.jsonl` as
+  agents write, redacted via the shared `normalizar_evento`. The frontend polls
+  ~1.4s, appends lines, auto-scrolls, caps DOM at 400 lines. The offset always
+  advances to a line boundary so a half-written trailing line is re-read, never
+  duplicated. Read-only: it only reads/streams files, never writes.
 
 ## Component usage (render helpers in `app.js`)
 

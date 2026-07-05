@@ -28,7 +28,7 @@ function status_por_eventos(eventos, atualizado_em) {
   return 'stale';
 }
 
-function normalizar_evento(registro, posicao) {
+export function normalizar_evento(registro, posicao) {
   const payload = registro?.payload || registro?.message || registro;
   const role = payload?.role || registro?.role || null;
   const kind = registro?.type || payload?.type || role || 'event';

@@ -1,10 +1,11 @@
 import { createServer } from 'node:http';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { abrir_banco } from './db.js';
 import { executar_scan } from './scanner.js';
+import { normalizar_evento } from './parsers.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = process.env.ACC_DATA || join(ROOT, 'data');
@@ -82,6 +83,42 @@ function listar_sessoes(url) {
   return db.prepare(`SELECT s.*,p.name project,p.path project_path FROM sessions s LEFT JOIN projects p ON p.id=s.project_id ${where} ORDER BY ${ordem} ${dir} LIMIT 500`).all(...valores).map(sessao_publica);
 }
 
+// Lê apenas os bytes novos do arquivo de sessão ao vivo (delta desde `from`).
+// O offset sempre avança até uma quebra de linha, então uma linha parcial (agente
+// escrevendo naquele instante) é relida no próximo poll. Redação vem de normalizar_evento.
+function tail_sessao(id, from) {
+  const row = db.prepare('SELECT source_path,status FROM sessions WHERE id=?').get(id);
+  if (!row) return null;
+  const arquivo = row.source_path;
+  if (!existsSync(arquivo)) return { offset: 0, size: 0, status: row.status, missing: true, lines: [] };
+  const size = statSync(arquivo).size;
+  let start = Number(from) || 0;
+  if (start > size) start = 0; // arquivo rotacionado/reescrito
+  if (start >= size) return { offset: size, size, status: row.status, lines: [] };
+  const CAP = 400_000; // primeira carga mostra só a cauda recente
+  let capped = false;
+  if (size - start > CAP) { start = size - CAP; capped = true; }
+  const len = size - start;
+  let buf = Buffer.alloc(len);
+  const fd = openSync(arquivo, 'r');
+  try { readSync(fd, buf, 0, len, start); } finally { closeSync(fd); }
+  if (capped) { const f = buf.indexOf(10); if (f >= 0) { start += f + 1; buf = buf.subarray(f + 1); } } // descarta 1ª linha parcial
+  let nl = -1;
+  for (let i = buf.length - 1; i >= 0; i -= 1) { if (buf[i] === 10) { nl = i; break; } }
+  if (nl < 0) return { offset: start, size, status: row.status, lines: [] };
+  const trecho = buf.subarray(0, nl).toString('utf8');
+  const offset = start + nl + 1;
+  const lines = [];
+  let pos = 0;
+  for (const linha of trecho.split(/\r?\n/)) {
+    if (!linha.trim()) { pos += 1; continue; }
+    let reg; try { reg = JSON.parse(linha); } catch { pos += 1; continue; }
+    const e = normalizar_evento(reg, pos); pos += 1;
+    if (e.summary) lines.push({ timestamp: e.timestamp, kind: e.kind, role: e.role, summary: e.summary });
+  }
+  return { offset, size, status: row.status, lines };
+}
+
 function dashboard() {
   const stats = Object.fromEntries(db.prepare('SELECT status,COUNT(*) total FROM sessions GROUP BY status').all().map((r) => [r.status, r.total]));
   return {
@@ -122,6 +159,12 @@ async function api(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { ok: true, host: HOST, database: 'sqlite', external_apis: false });
   if (req.method === 'GET' && url.pathname === '/api/dashboard') return json(res, 200, dashboard());
   if (req.method === 'GET' && url.pathname === '/api/sessions') return json(res, 200, listar_sessoes(url));
+  if (req.method === 'GET' && /^\/api\/sessions\/.+\/tail$/.test(url.pathname)) {
+    const partes = url.pathname.split('/');
+    const out = tail_sessao(decodeURIComponent(partes[partes.length - 2]), url.searchParams.get('from'));
+    if (!out) return json(res, 404, { error: 'Sessão não encontrada' });
+    return json(res, 200, out);
+  }
   if (req.method === 'GET' && url.pathname.startsWith('/api/sessions/')) {
     const id = decodeURIComponent(url.pathname.split('/').at(-1));
     const session = sessao_publica(db.prepare('SELECT s.*,p.name project,p.path project_path FROM sessions s LEFT JOIN projects p ON p.id=s.project_id WHERE s.id=?').get(id));
