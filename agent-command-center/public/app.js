@@ -520,9 +520,25 @@ function renderTab() {
     host.querySelectorAll('[data-term-copy]').forEach((btn) => { btn.onclick = () => { const t = btn.closest('.term-panel')?.querySelector('[data-copy]')?.dataset.copy || ''; copy(t, btn); }; });
     host.querySelectorAll('[data-session-open]').forEach((btn) => { btn.onclick = () => { detailState.tab = 'timeline'; renderTab(); }; });
   } else if (tab === 'files') {
-    host.innerHTML = `<div class="tabpane">${(s.files || []).length ? `<div class="surface files-list">${s.files.map((f) => `<code>${esc(f)}</code>`).join('')}</div>` : emptyState('file', 'Nenhum arquivo', 'Nenhum arquivo tocado foi detectado nos eventos.')}</div>`;
+    const files = s.files || [];
+    if (!files.length) { host.innerHTML = `<div class="tabpane">${emptyState('file', 'Nenhum arquivo', 'Nenhum arquivo tocado foi detectado nos eventos.')}</div>`; }
+    else {
+      const groups = {};
+      for (const f of files) { const n = f.replace(/\\/g, '/'); const i = n.lastIndexOf('/'); const dir = i >= 0 ? n.slice(0, i) : '.'; (groups[dir] = groups[dir] || []).push({ name: i >= 0 ? n.slice(i + 1) : n, full: f }); }
+      host.innerHTML = `<div class="tabpane"><p class="muted" style="margin-bottom:10px">${files.length} arquivos tocados em ${Object.keys(groups).length} pastas · clique para copiar o caminho</p>
+        ${Object.entries(groups).map(([dir, fs]) => `<div class="filegroup"><div class="dir">${ic('projects')}<code>${esc(dir)}</code><span>${fs.length}</span></div>
+          ${fs.map((f) => `<button class="filerow" data-copy-path="${esc(f.full)}">${ic('file')}<code>${esc(f.name)}</code>${ic('copy')}</button>`).join('')}</div>`).join('')}</div>`;
+      host.querySelectorAll('[data-copy-path]').forEach((b) => { b.onclick = () => copy(b.dataset.copyPath, b); });
+    }
   } else if (tab === 'tools') {
-    host.innerHTML = `<div class="tabpane">${(s.tools || []).length ? `<div class="chips">${s.tools.map((t) => `<span class="pill accent">${ic('tool')}${esc(t)}</span>`).join('')}</div>` : emptyState('tool', 'Nenhuma tool', 'Nenhuma chamada de tool detectada.')}</div>`;
+    const tools = s.tools || [];
+    if (!tools.length) { host.innerHTML = `<div class="tabpane">${emptyState('tool', 'Nenhuma tool', 'Nenhuma chamada de tool detectada.')}</div>`; }
+    else {
+      const CAT = [[/read|glob|grep|ls|cat|view/i, 'Leitura', 'file'], [/edit|write|patch|notebook|create/i, 'Edição', 'tool'], [/bash|shell|exec|command|run|terminal/i, 'Execução', 'terminal'], [/web|fetch|search|browser|navigate/i, 'Web', 'search'], [/task|agent|spawn/i, 'Subagente', 'agents']];
+      const buckets = {};
+      for (const t of tools) { const [, label, glyph] = CAT.find(([re]) => re.test(t)) || [, 'Outros', 'chevron']; (buckets[label] = buckets[label] || { glyph, items: [] }).items.push(t); }
+      host.innerHTML = `<div class="tabpane">${Object.entries(buckets).map(([label, b]) => `<div class="toolgroup"><div class="dir">${ic(b.glyph)}<code>${esc(label)}</code><span>${b.items.length}</span></div><div class="chips">${b.items.map((t) => `<span class="pill accent">${ic(b.glyph)}${esc(t)}</span>`).join('')}</div></div>`).join('')}</div>`;
+    }
   } else {
     host.innerHTML = `<div class="tabpane"><p style="line-height:1.6">${esc(s.summary)}</p></div>`;
   }

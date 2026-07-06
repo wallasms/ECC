@@ -431,6 +431,18 @@ dialog::backdrop{background:#0006;backdrop-filter:blur(4px)}
 .tabpane{animation:rise .3s ease}
 .files-list code{display:block;font:11px ui-monospace,monospace;color:var(--muted-2);padding:5px 10px;border-bottom:1px solid var(--border-soft);word-break:break-all}
 .files-list code:last-child{border:0}
+.filegroup,.toolgroup{margin-bottom:16px}
+.dir{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin:0 0 6px;text-transform:none}
+.dir svg{width:13px;height:13px}
+.dir code{font:11px ui-monospace,monospace;color:var(--muted-2);word-break:break-all}
+.dir span{margin-left:auto;background:var(--pill-bg);color:var(--pill-fg);border-radius:99px;padding:0 8px;font-size:10px;font-weight:600}
+.filerow{display:flex;align-items:center;gap:9px;width:100%;text-align:left;border:1px solid var(--border-soft);background:var(--surface);
+  border-radius:9px;padding:7px 11px;margin-bottom:5px;cursor:pointer;font:inherit;color:var(--fg);transition:border-color .12s,background .12s}
+.filerow:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--border));background:var(--surface-2)}
+.filerow code{flex:1;font:11.5px ui-monospace,monospace;word-break:break-all}
+.filerow>svg:first-child{color:var(--accent);width:14px;height:14px;flex:none}
+.filerow>svg:last-child{color:var(--muted);width:13px;height:13px;flex:none;opacity:.5}
+.filerow:hover>svg:last-child{opacity:1}
 
 /* ---------- Timeline (SessionTimeline / TimelineEvent) ---------- */
 .timeline{margin:6px 0 6px 6px;padding-left:26px;position:relative}
