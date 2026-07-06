@@ -476,7 +476,7 @@ function timelineEvent(e) {
 /* ---------- render ---------- */
 async function render(quiet) {
   const g = ++gen;
-  LIVE.stop();
+  LIVE.stop(); kbRow = -1;
   document.querySelectorAll('.nav').forEach((b) => b.classList.toggle('active', b.dataset.page === page));
   if (!quiet) $('#app').innerHTML = skeletonFor(page);
   try {
@@ -623,10 +623,24 @@ $('#command').onclick = () => $('#command-input').focus();
 window.addEventListener('hashchange', () => { readHash(); render(); });
 $('#theme').onclick = () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 $('#palette-btn').onclick = openPalette;
+let kbRow = -1; let gPending = false;
+const GCHORD = { d: 'dashboard', l: 'live', t: 'studio', s: 'sessions', p: 'projects', k: 'skills', h: 'hooks', a: 'agents', q: 'prompts' };
+function highlightRow(rows) { rows.forEach((r) => r.classList.remove('kb')); const r = rows[kbRow]; if (r) { r.classList.add('kb'); r.scrollIntoView({ block: 'nearest' }); } }
 addEventListener('keydown', (e) => {
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '');
-  if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) { e.preventDefault(); openPalette(); }
-  else if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey && !typing) { e.preventDefault(); $('#command-input').focus(); }
+  const busy = $('#detail').open || palette.open;
+  if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) { e.preventDefault(); openPalette(); return; }
+  if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === '/') { e.preventDefault(); $('#command-input').focus(); return; }
+  if (gPending) { gPending = false; if (GCHORD[e.key]) { e.preventDefault(); goto(GCHORD[e.key]); } return; }
+  if (e.key === 'g' && !busy) { gPending = true; setTimeout(() => { gPending = false; }, 700); return; }
+  if (page === 'sessions' && !busy) {
+    const rows = [...document.querySelectorAll('#app .row[data-session]')];
+    if (!rows.length) return;
+    if (e.key === 'j' || e.key === 'ArrowDown') { kbRow = Math.min(rows.length - 1, kbRow + 1); highlightRow(rows); e.preventDefault(); }
+    else if (e.key === 'k' || e.key === 'ArrowUp') { kbRow = Math.max(0, kbRow - 1); highlightRow(rows); e.preventDefault(); }
+    else if (e.key === 'Enter' && rows[kbRow]) { detail(rows[kbRow].dataset.session); e.preventDefault(); }
+  }
 });
 render();
 setInterval(() => { if ((page === 'dashboard' || page === 'sessions' || page === 'studio') && !$('#detail').open && !palette.open && !$('#scan')?.disabled && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '')) render(true); }, 30000);

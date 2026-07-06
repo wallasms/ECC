@@ -212,6 +212,7 @@ h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;
   padding:11px 16px;border-bottom:1px solid var(--border-soft);font-size:13px;cursor:pointer;transition:background .1s}
 .row:last-child{border:0}
 .row:hover{background:var(--surface-2)}
+.row.kb{background:var(--accent-bg);box-shadow:inset 3px 0 0 var(--accent)}
 .row.head{cursor:default;background:transparent;border-bottom:1px solid var(--border);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600}
 .row.head:hover{background:transparent}
 .sortable{cursor:pointer;user-select:none}
