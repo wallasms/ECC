@@ -19,29 +19,25 @@ Status legend: ✅ done · 🔜 next · 🔭 later.
 - Readable event extractor (no more JSON blobs; base64/encrypted never leak).
 - Syntax-colored diffs (Claude Edit/Write, Codex apply_patch) in timeline +
   live wall.
+- Live wall polish: jump-to-new chip, freshness readout, pause when hidden,
+  live status recompute, grep filter across panels.
+- Session detail: files grouped by directory (click-to-copy), tools categorized.
+- ⌘K palette: runnable actions (scan/theme/glass), quick status filters, and
+  fuzzy session jump.
+- Per-page loading skeletons; friendly error state with retry.
 
 ## 🔜 Next (high value, low/med effort)
 
-1. **Follow/pin + focus mode on the live wall.** A "seguir" toggle that keeps a
-   panel pinned and full-width; keyboard `f` to focus the hovered panel. Pause
-   pollers when `document.hidden` (Page Visibility API) to save CPU. *Small.*
-2. **Live status recompute.** The wall trusts the DB status (stale between
-   scans). Recompute a lightweight status from the tailed lines (error/await/
-   done regex, same as `status_por_eventos`) so a panel flips to "falhou"/
-   "precisa de input" live without a rescan. *Small, frontend-only.*
-3. **Search across live output.** A filter box on Ao Vivo that highlights/greps
-   incoming lines per panel (debounced, client-side). *Small.*
-4. **Session detail: Tools & Files upgrades.** Group tool calls with counts,
-   make file paths click-to-copy and group by directory, show a per-session
-   "edited vs read" split. Data already present in `tools[]`/`files[]`. *Small.*
-5. **Virtualize the sessions table.** At 300+ rows it's fine; past ~1k, windowe
+1. **Virtualize the sessions table.** At 300+ rows it's fine; past ~1k, window
    the rows (simple manual windowing, no library) to keep scroll smooth. *Med.*
-6. **Skeleton parity + optimistic nav.** Per-page skeletons that match final
-   layout (cards vs table vs wall) instead of the generic two-bar skeleton.
-   *Small.*
-7. **Empty/error polish.** Distinct empty states per page with a primary action
-   (e.g. Hooks → "abrir docs/hooks.md"), and a retry button on fetch errors.
-   *Small.*
+2. **Keyboard-first nav.** `j/k` to move the session list, `Enter` to open,
+   `g d`/`g l`/`g s` chords for pages (Linear-style). *Med.*
+3. **Notifications.** When a watched session flips to `needs_input`/`failed`,
+   surface a toast (opt-in Notification API). *Small.*
+4. **Diff viewer polish.** Side-by-side (old/new) toggle for Edit events,
+   collapsible hunks, word-level intra-line highlighting. *Med.*
+5. **Hooks empty-state action** → "abrir docs/hooks.md"; per-page empties with a
+   primary action. *Small.*
 
 ## 🔭 Later (bigger or needs backend)
 

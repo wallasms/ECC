@@ -577,14 +577,16 @@ function paletteItems() {
   ];
 }
 function openPalette() {
-  const items = paletteItems();
-  const list = () => items.filter((i) => i.label.toLowerCase().includes(($('#palette-input').value || '').toLowerCase()));
-  let sel = 0;
-  const runSel = (i) => { palette.close(); i.run(); };
+  const statics = paletteItems();
+  let sessionItems = []; let sel = 0; let deb;
+  const q = () => ($('#palette-input').value || '').toLowerCase();
+  const list = () => statics.filter((i) => i.label.toLowerCase().includes(q())).concat(sessionItems);
+  const runSel = (i) => { if (!i) return; palette.close(); i.run(); };
   const paint = () => { const l = list(); sel = Math.max(0, Math.min(sel, l.length - 1)); $('#palette-list').innerHTML = l.map((i, n) => `<div class="palette-item ${n === sel ? 'on' : ''}" data-n="${n}">${ic(i.icon)}<span>${esc(i.label)}</span><span class="hint">${i.hint}</span></div>`).join('') || '<div class="palette-item"><span class="hint">Nenhum comando</span></div>'; $('#palette-list').querySelectorAll('[data-n]').forEach((el) => { el.onclick = () => runSel(l[Number(el.dataset.n)]); }); };
-  $('#palette-input').value = ''; paint(); palette.showModal(); $('#palette-input').focus();
-  $('#palette-input').oninput = () => { sel = 0; paint(); };
-  $('#palette-input').onkeydown = (e) => { const l = list(); if (!l.length) return; if (e.key === 'ArrowDown') { sel = (sel + 1) % l.length; paint(); e.preventDefault(); } else if (e.key === 'ArrowUp') { sel = (sel - 1 + l.length) % l.length; paint(); e.preventDefault(); } else if (e.key === 'Enter') { if (l[sel]) runSel(l[sel]); } };
+  const search = async () => { const term = q(); if (term.length < 2) { sessionItems = []; paint(); return; } try { const r = await api('/api/sessions?q=' + encodeURIComponent(term)); sessionItems = r.slice(0, 6).map((s) => ({ label: s.title.slice(0, 64), icon: brand(s.source).glyph, hint: 'sessão', run: () => detail(s.id) })); } catch { sessionItems = []; } paint(); };
+  $('#palette-input').value = ''; sessionItems = []; paint(); palette.showModal(); $('#palette-input').focus();
+  $('#palette-input').oninput = () => { sel = 0; paint(); clearTimeout(deb); deb = setTimeout(search, 220); };
+  $('#palette-input').onkeydown = (e) => { const l = list(); if (!l.length) return; if (e.key === 'ArrowDown') { sel = (sel + 1) % l.length; paint(); e.preventDefault(); } else if (e.key === 'ArrowUp') { sel = (sel - 1 + l.length) % l.length; paint(); e.preventDefault(); } else if (e.key === 'Enter') { runSel(l[sel]); } };
 }
 
 /* ---------- nav render + global wiring ---------- */
