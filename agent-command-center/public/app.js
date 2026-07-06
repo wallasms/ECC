@@ -153,6 +153,16 @@ function agentCanvas(sessions) {
 /* ---------- shell + empty ---------- */
 function shell(title, subtitle, content, action = '') { return `<div class="topline"><div><h1>${title}</h1><div class="muted">${subtitle}</div></div>${action ? `<div class="actions">${action}</div>` : ''}</div>${content}`; }
 const emptyState = (glyph, title, hint, cta = '') => `<div class="empty"><div class="glyph">${ic(glyph)}</div><b>${esc(title)}</b><p>${esc(hint)}</p>${cta ? `<div class="cta">${cta}</div>` : ''}</div>`;
+// Skeleton que espelha o layout final de cada página (evita salto na troca).
+function skeletonFor(p) {
+  const bar = (c = '') => `<div class="skeleton ${c}"></div>`;
+  const n = (k, c) => Array.from({ length: k }).map(() => bar(c)).join('');
+  if (p === 'dashboard') return `${bar('hero')}<div class="sk-stats">${n(6, 'sk-box')}</div><div class="sk-wall">${n(3, 'sk-tall')}</div>${bar('tall')}`;
+  if (p === 'live' || p === 'studio') return `${bar('sk-bar')}<div class="sk-wall">${n(6, 'sk-tall')}</div>`;
+  if (['projects', 'skills', 'hooks', 'agents', 'prompts'].includes(p)) return `${bar('sk-bar')}<div class="sk-cards">${n(6, 'sk-card')}</div>`;
+  if (p === 'design') return `<div class="sk-cards">${n(8, 'sk-card')}</div>`;
+  return `${bar('sk-bar')}${bar('tall')}`; // sessions / settings
+}
 
 /* ---------- Sessions table ---------- */
 function sessionRow(s) {
@@ -441,7 +451,7 @@ async function render(quiet) {
   const g = ++gen;
   LIVE.stop();
   document.querySelectorAll('.nav').forEach((b) => b.classList.toggle('active', b.dataset.page === page));
-  if (!quiet) $('#app').innerHTML = '<div class="skeleton"></div><div class="skeleton tall"></div>';
+  if (!quiet) $('#app').innerHTML = skeletonFor(page);
   try {
     let html;
     if (page === 'dashboard') html = await dashboard();

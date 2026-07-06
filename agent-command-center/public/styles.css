@@ -382,6 +382,15 @@ pre.diff .dl.phdr{color:var(--warn-fg);font-weight:600}
 .form label{font-size:12px;color:var(--muted-2)}
 .skeleton{height:64px;border-radius:14px;margin-bottom:14px;background:linear-gradient(90deg,var(--surface-2) 25%,var(--surface) 50%,var(--surface-2) 75%);background-size:200% 100%;animation:load 1.2s infinite}
 .skeleton.tall{height:280px}
+.skeleton.hero{height:96px;border-radius:20px}
+.skeleton.sk-bar{height:44px;width:320px;border-radius:10px}
+.sk-stats{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin:26px 0 20px}
+.sk-stats .skeleton{height:78px;margin:0}
+.sk-wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;margin-bottom:20px}
+.sk-wall .skeleton.sk-tall{height:200px;margin:0}
+.sk-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;margin-top:20px}
+.sk-cards .skeleton.sk-card{height:130px;margin:0}
+@media(max-width:1100px){.sk-stats{grid-template-columns:repeat(3,1fr)}}
 @keyframes load{to{background-position:-200% 0}}
 
 /* ---------- Mount animation ---------- */
