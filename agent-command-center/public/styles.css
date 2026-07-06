@@ -336,6 +336,7 @@ h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;
 .term-line.del{color:var(--term-red);background:color-mix(in srgb,var(--term-red) 10%,transparent)}
 .term-line.add .gutter{color:var(--term-green)}.term-line.del .gutter{color:var(--term-red)}
 .term-line.hunk{color:var(--term-accent)}.term-line.phdr{color:var(--term-amber)}
+.term-line.hit{background:color-mix(in srgb,var(--term-amber) 16%,transparent);border-radius:3px}
 /* diff/patch coloring — light timeline <pre> */
 pre.diff{display:flex;flex-direction:column}
 pre.diff .dl{display:block;padding:0 4px;border-radius:2px}

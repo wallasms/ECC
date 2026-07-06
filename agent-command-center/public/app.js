@@ -233,6 +233,15 @@ async function studio() {
    Tails the actual session .jsonl files as agents append to them, via
    /api/sessions/:id/tail?from=<offset>. Real data, redacted server-side. */
 const LIVE = { timers: [], paused: new Set(), stop() { this.timers.forEach(clearInterval); this.timers = []; this.paused.clear(); } };
+let liveFilter = '';
+function filterBody(body) {
+  body.querySelectorAll('.term-line').forEach((el) => {
+    const hit = !liveFilter || el.textContent.toLowerCase().includes(liveFilter);
+    el.style.display = hit ? '' : 'none';
+    el.classList.toggle('hit', !!liveFilter && hit);
+  });
+}
+function applyLiveFilter() { document.querySelectorAll('.live-body').forEach(filterBody); }
 function liveLineClass(e) {
   const h = `${e.kind} ${e.role || ''}`.toLowerCase();
   if (/error|fail|exception|panic|traceback/.test(h)) return 'err';
@@ -276,8 +285,11 @@ async function livePage() {
   const data = await api('/api/sessions?' + new URLSearchParams(Object.entries(filters).filter(([, v]) => v)));
   const rank = { working: 0, needs_input: 1, stale: 2, unknown: 3, completed: 4, failed: 5 };
   const list = [...data].sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || (b.updated_at > a.updated_at ? 1 : -1)).slice(0, 6);
+  liveFilter = '';
   const seg = (val, label, glyph) => `<button class="${(filters.source || '') === val ? 'on' : ''}" data-source="${val}">${glyph ? ic(glyph) : ''}${label}</button>`;
-  const toolbar = `<div class="toolbar"><div class="segmented">${seg('', 'Todos')}${seg('claude', 'Claude', 'spark')}${seg('codex', 'Codex', 'chevron')}</div><span class="muted" style="margin-left:4px">${ic('alert')} Lido direto dos arquivos de sessão — stdout/stderr brutos não são capturados; o fluxo mostra prompts, respostas, tools e edições conforme o agente escreve.</span></div>`;
+  const toolbar = `<div class="toolbar"><div class="segmented">${seg('', 'Todos')}${seg('claude', 'Claude', 'spark')}${seg('codex', 'Codex', 'chevron')}</div>
+    <input class="search" id="live-filter" placeholder="Filtrar linhas ao vivo (grep)…" value="">
+    <span class="muted" style="margin-left:4px">${ic('alert')} Lido direto dos arquivos de sessão — o fluxo mostra prompts, respostas, tools e edições conforme o agente escreve.</span></div>`;
   const wall = list.length ? `<div class="live-wall">${list.map(liveTermShell).join('')}</div>` : emptyState('terminal', 'Nenhuma sessão para acompanhar', 'Nenhuma sessão indexada ainda. Reescaneie no Dashboard para indexar sessões locais.');
   return shell('Ao Vivo', 'Saída dos terminais em tempo real — as telas descem conforme os agentes trabalham.', `${toolbar}${wall}`);
 }
@@ -313,6 +325,7 @@ function startLive() {
   document.querySelectorAll('[data-live-pause]').forEach((b) => { b.onclick = () => { const p = b.closest('.live-term'); const id = p.dataset.liveId; if (LIVE.paused.has(id)) { LIVE.paused.delete(id); b.textContent = '❚❚'; p.classList.remove('paused'); } else { LIVE.paused.add(id); b.textContent = '▶'; p.classList.add('paused'); } }; });
   document.querySelectorAll('[data-live-expand]').forEach((b) => { b.onclick = () => b.closest('.live-term').classList.toggle('focus'); });
   document.querySelectorAll('[data-live-jump]').forEach((b) => { b.onclick = () => { const body = b.closest('.live-term').querySelector('.live-body'); body.scrollTop = body.scrollHeight; b.closest('.live-term').classList.remove('has-new'); }; });
+  let fdeb; $('#live-filter')?.addEventListener('input', (e) => { clearTimeout(fdeb); const v = e.target.value.toLowerCase().trim(); fdeb = setTimeout(() => { liveFilter = v; applyLiveFilter(); }, 200); });
 }
 function appendLiveLines(body, lines) {
   const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 70;
@@ -329,6 +342,7 @@ function appendLiveLines(body, lines) {
   }).join('');
   body.insertAdjacentHTML('beforeend', html);
   while (body.children.length > 500) body.removeChild(body.firstChild); // não guardar scroll infinito
+  if (liveFilter) filterBody(body); // grep também nas linhas novas
   if (nearBottom) body.scrollTop = body.scrollHeight;
   else body.closest('.live-term')?.classList.add('has-new'); // usuário rolou p/ cima: avisa
 }
