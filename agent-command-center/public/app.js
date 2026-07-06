@@ -179,6 +179,15 @@ function agentCanvas(sessions) {
 function shell(title, subtitle, content, action = '') { return `<div class="topline"><div><h1>${title}</h1><div class="muted">${subtitle}</div></div>${action ? `<div class="actions">${action}</div>` : ''}</div>${content}`; }
 const emptyState = (glyph, title, hint, cta = '') => `<div class="empty"><div class="glyph">${ic(glyph)}</div><b>${esc(title)}</b><p>${esc(hint)}</p>${cta ? `<div class="cta">${cta}</div>` : ''}</div>`;
 const scanCta = `<button class="primary" data-scan-cta>${ic('scan')}Reescanear</button>`;
+function animateCounts() {
+  if (matchMedia('(prefers-reduced-motion:reduce)').matches) return;
+  document.querySelectorAll('[data-count]').forEach((el) => {
+    const target = Number(el.dataset.count); if (!isFinite(target)) return;
+    const dur = 650, t0 = performance.now();
+    const tick = (t) => { const p = Math.min(1, (t - t0) / dur); el.textContent = Math.round(target * (1 - Math.pow(1 - p, 3))).toLocaleString('pt-BR'); if (p < 1) requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  });
+}
 // Skeleton que espelha o layout final de cada página (evita salto na troca).
 function skeletonFor(p) {
   const bar = (c = '') => `<div class="skeleton ${c}"></div>`;
@@ -232,7 +241,7 @@ async function dashboard() {
     ['Custo', d.stats.cost ? usd(d.stats.cost) : 'não detectado', '--accent', 'droplet', null],
   ];
   const stats = `<div class="stats">${cards.map(([k, v, a, i, f]) => `<div class="stat${f ? ' clickable' : ''}"${a ? ` style="--stat-accent:var(${a})"` : ''}${f ? ` data-goto-sessions='${JSON.stringify(f)}' tabindex="0" role="button"` : ''}>
-    <div class="stat-top">${ic(i)}<span class="lbl">${k}</span></div><b>${v}</b></div>`).join('')}</div>`;
+    <div class="stat-top">${ic(i)}<span class="lbl">${k}</span></div>${Number.isInteger(v) ? `<b data-count="${v}">0</b>` : `<b>${v}</b>`}</div>`).join('')}</div>`;
   const live = d.recent.filter((s) => s.status === 'working' || s.status === 'needs_input').slice(0, 3);
   const strip = live.length ? `<div class="section-head"><h2>Terminais ativos</h2><button class="link-btn" data-goto="live">Ver ao vivo →</button></div>
     <div class="term-strip">${live.map((s) => terminalPreview(s)).join('')}</div>` : '';
@@ -527,6 +536,7 @@ function bind() {
   $('#settings-form')?.addEventListener('submit', async (e) => { e.preventDefault(); const d = Object.fromEntries(new FormData(e.target)); const current = await api('/api/settings'); current.session_paths = { codex: d.codex.split('\n').filter(Boolean), claude: d.claude.split('\n').filter(Boolean) }; await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(current) }); render(); });
   if (page === 'studio') loadStudioQueue();
   if (page === 'live') startLive();
+  if (page === 'dashboard') animateCounts();
 }
 function copy(text, btn) { navigator.clipboard?.writeText(text).then(() => { if (!btn) return; const o = btn.innerHTML; btn.innerHTML = ic('check') + 'Copiado'; setTimeout(() => { btn.innerHTML = o; }, 1200); }).catch(() => {}); }
 async function loadStudioQueue() { try { const q = await api('/api/prompts'); const el = $('#studio-queue'); if (el) el.outerHTML = q.length ? `<div class="cards">${q.slice(0, 6).map(promptCard).join('')}</div>` : `<div class="surface">${emptyState('prompts', 'Fila vazia', 'Adicione prompts na Prompt Queue.')}</div>`; } catch {} }
