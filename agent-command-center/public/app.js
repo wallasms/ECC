@@ -70,6 +70,31 @@ const usd = (v) => `US$ ${Number(v || 0).toLocaleString('pt-BR', { minimumFracti
 const saudacao = () => { const h = new Date().getHours(); return h < 5 ? 'Boa madrugada' : h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite'; };
 const STATUS_LABEL = { working: 'Trabalhando', needs_input: 'Precisa de input', completed: 'Concluída', failed: 'Falhou', stale: 'Inativa', unknown: 'Desconhecida' };
 
+/* ---------- Toasts + status-flip detection ---------- */
+function toast(msg, kind = 'info') {
+  let host = $('#toasts');
+  if (!host) { host = document.createElement('div'); host.id = 'toasts'; host.className = 'toasts'; document.body.appendChild(host); }
+  const el = document.createElement('div');
+  el.className = 'toast glass t-' + kind; // t- prefixo evita colisão com classes de status (.failed/.needs_input)
+  el.innerHTML = `<span class="tdot t-${esc(kind)}"></span><span class="tmsg">${esc(msg)}</span><button class="tx" aria-label="Fechar">✕</button>`;
+  host.appendChild(el);
+  const kill = () => { el.classList.add('out'); setTimeout(() => el.remove(), 200); };
+  el.querySelector('.tx').onclick = kill;
+  setTimeout(kill, 6000);
+  return el;
+}
+const SEEN = {};
+function notifyFlips(list) {
+  for (const s of list || []) {
+    const prev = SEEN[s.id];
+    if (prev && prev !== s.status && (s.status === 'needs_input' || s.status === 'failed')) {
+      toast(`${brand(s.source).label}: ${s.title.slice(0, 44)} → ${STATUS_LABEL[s.status]}`, s.status)
+        .querySelector('.tmsg').onclick = () => detail(s.id);
+    }
+    SEEN[s.id] = s.status;
+  }
+}
+
 /* ---------- AgentAvatar ---------- */
 const SUBAGENT_ICON = [[/explor|search|compass/i, 'compass'], [/ui|polish|design|wand/i, 'spark'], [/review|shield|check/i, 'shield'], [/test|fix|wrench/i, 'tool'], [/alm|finance|chart|domain/i, 'chart'], [/skill|librar|book/i, 'book'], [/hook|safety|lock/i, 'lock']];
 function brand(source) {
@@ -188,6 +213,7 @@ function tabela(items, sortable) { return `<div class="surface">${sortable ? tab
 /* ---------- Dashboard ---------- */
 async function dashboard() {
   const d = await api('/api/dashboard');
+  notifyFlips(d.recent);
   const scan = `<button class="ghost" id="scan-full" title="Reprocessa todos os arquivos, ignorando o cache de mtime">Reindexar tudo</button><button class="primary" id="scan">${ic('scan', 'inline-ic')}Reescanear</button>`;
   if (!d.stats.sessions) {
     return shell(saudacao(), 'Nenhuma sessão indexada ainda.', `<div class="apple-panel onboard rise"><p><b>Primeiro uso?</b> Confira os caminhos em <a href="#settings">Settings</a> e clique em Reescanear para indexar suas sessões locais do Claude Code e Codex.</p></div>`, scan);
@@ -222,6 +248,7 @@ async function dashboard() {
 async function sessions() {
   const qs = new URLSearchParams(Object.entries(filters).filter(([, v]) => v));
   const data = await api('/api/sessions?' + qs);
+  notifyFlips(data);
   const seg = (val, label, glyph) => `<button class="${(filters.source || '') === val ? 'on' : ''}" data-source="${val}">${glyph ? ic(glyph) : ''}${label}</button>`;
   const toolbar = `<div class="toolbar">
     <div class="segmented">${seg('', 'Todos')}${seg('claude', 'Claude', 'spark')}${seg('codex', 'Codex', 'chevron')}</div>
