@@ -548,14 +548,27 @@ function renderTab() {
 const runCommand = async () => { const r = await api('/api/command', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: $('#command-input').value }) }); const f = r.filters || {}; if (r.query) f.q = r.query; goto(r.page || 'sessions', f); };
 $('#command-input').onkeydown = (e) => { if (e.key === 'Enter') runCommand(); };
 const palette = $('#palette');
+const paletteScan = async () => { try { const r = await api('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); render(); alert(`${r.indexados} indexadas · ${r.erros} erros`); } catch (e) { alert(e.message); } };
+function paletteItems() {
+  return [
+    ...nav.map(([label, id, icon]) => ({ label, icon, hint: 'ir para', run: () => goto(id) })),
+    { label: 'Reescanear sessões', icon: 'scan', hint: 'ação', run: paletteScan },
+    { label: 'Alternar tema claro/escuro', icon: 'settings', hint: 'ação', run: () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark') },
+    { label: 'Alternar Liquid Glass', icon: 'droplet', hint: 'ação', run: () => { setGlass(document.documentElement.dataset.glass === 'off'); render(); } },
+    { label: 'Sessões que falharam', icon: 'alert', hint: 'filtro', run: () => goto('sessions', { status: 'failed' }) },
+    { label: 'Sessões que precisam de input', icon: 'chat', hint: 'filtro', run: () => goto('sessions', { status: 'needs_input' }) },
+    { label: 'Sessões ativas', icon: 'terminal', hint: 'filtro', run: () => goto('sessions', { status: 'working' }) },
+  ];
+}
 function openPalette() {
-  const items = nav.map(([label, id, icon]) => ({ label, id, icon, hint: 'ir para' }));
+  const items = paletteItems();
   const list = () => items.filter((i) => i.label.toLowerCase().includes(($('#palette-input').value || '').toLowerCase()));
   let sel = 0;
-  const paint = () => { const l = list(); sel = Math.max(0, Math.min(sel, l.length - 1)); $('#palette-list').innerHTML = l.map((i, n) => `<div class="palette-item ${n === sel ? 'on' : ''}" data-id="${i.id}">${ic(i.icon)}<span>${esc(i.label)}</span><span class="hint">${i.hint}</span></div>`).join(''); $('#palette-list').querySelectorAll('[data-id]').forEach((el) => { el.onclick = () => { goto(el.dataset.id); palette.close(); }; }); };
+  const runSel = (i) => { palette.close(); i.run(); };
+  const paint = () => { const l = list(); sel = Math.max(0, Math.min(sel, l.length - 1)); $('#palette-list').innerHTML = l.map((i, n) => `<div class="palette-item ${n === sel ? 'on' : ''}" data-n="${n}">${ic(i.icon)}<span>${esc(i.label)}</span><span class="hint">${i.hint}</span></div>`).join('') || '<div class="palette-item"><span class="hint">Nenhum comando</span></div>'; $('#palette-list').querySelectorAll('[data-n]').forEach((el) => { el.onclick = () => runSel(l[Number(el.dataset.n)]); }); };
   $('#palette-input').value = ''; paint(); palette.showModal(); $('#palette-input').focus();
   $('#palette-input').oninput = () => { sel = 0; paint(); };
-  $('#palette-input').onkeydown = (e) => { const l = list(); if (e.key === 'ArrowDown') { sel = (sel + 1) % l.length; paint(); e.preventDefault(); } else if (e.key === 'ArrowUp') { sel = (sel - 1 + l.length) % l.length; paint(); e.preventDefault(); } else if (e.key === 'Enter') { if (l[sel]) { goto(l[sel].id); palette.close(); } } };
+  $('#palette-input').onkeydown = (e) => { const l = list(); if (!l.length) return; if (e.key === 'ArrowDown') { sel = (sel + 1) % l.length; paint(); e.preventDefault(); } else if (e.key === 'ArrowUp') { sel = (sel - 1 + l.length) % l.length; paint(); e.preventDefault(); } else if (e.key === 'Enter') { if (l[sel]) runSel(l[sel]); } };
 }
 
 /* ---------- nav render + global wiring ---------- */
