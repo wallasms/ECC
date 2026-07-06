@@ -178,6 +178,7 @@ function agentCanvas(sessions) {
 /* ---------- shell + empty ---------- */
 function shell(title, subtitle, content, action = '') { return `<div class="topline"><div><h1>${title}</h1><div class="muted">${subtitle}</div></div>${action ? `<div class="actions">${action}</div>` : ''}</div>${content}`; }
 const emptyState = (glyph, title, hint, cta = '') => `<div class="empty"><div class="glyph">${ic(glyph)}</div><b>${esc(title)}</b><p>${esc(hint)}</p>${cta ? `<div class="cta">${cta}</div>` : ''}</div>`;
+const scanCta = `<button class="primary" data-scan-cta>${ic('scan')}Reescanear</button>`;
 // Skeleton que espelha o layout final de cada página (evita salto na troca).
 function skeletonFor(p) {
   const bar = (c = '') => `<div class="skeleton ${c}"></div>`;
@@ -208,7 +209,7 @@ function sessionRow(s) {
 }
 function th(label, key) { const on = filters.sort === key || (!filters.sort && key === 'updated_at'); const arrow = on ? (filters.dir === 'asc' ? ' ↑' : ' ↓') : ''; return `<span class="sortable" data-sort="${key}"${key ? ' tabindex="0" role="button"' : ''}>${label}${arrow}</span>`; }
 function tableHead() { return `<div class="row head">${th('', '')}${th('Sessão', 'title')}<span>Status</span>${th('Agente', 'source')}<span>Modelo</span>${th('Projeto', 'project')}<span></span>${th('Atividade', 'updated_at')}</div>`; }
-function tabela(items, sortable) { return `<div class="surface">${sortable ? tableHead() : ''}${items.length ? items.map(sessionRow).join('') : emptyState('sessions', 'Nenhuma sessão', 'Ajuste os filtros ou reescaneie para indexar novas sessões.')}</div>`; }
+function tabela(items, sortable) { return `<div class="surface">${sortable ? tableHead() : ''}${items.length ? items.map(sessionRow).join('') : emptyState('sessions', 'Nenhuma sessão', 'Ajuste os filtros ou reescaneie para indexar novas sessões.', scanCta)}</div>`; }
 
 /* ---------- Dashboard ---------- */
 async function dashboard() {
@@ -391,7 +392,7 @@ async function cardPage(endpoint, title, subtitle, renderCard, action = '') {
   const recs = data.recommendations
     ? `<h2>Recomendações rule-based</h2><div class="cards">${data.recommendations.map((x) => `<div class="card rise"><div class="card-head"><h3><span class="card-icon">${ic('spark')}</span>${esc(x.name)}</h3><span class="score"><span class="bar"><i style="width:${Math.round((x.score || 0) * 100)}%"></i></span>${Math.round((x.score || 0) * 100)}</span></div><p>${esc(x.reason)}</p></div>`).join('')}</div>`
     : '';
-  return shell(title, subtitle, `<div class="${items.length ? 'cards' : 'surface'}">${items.length ? items.map(renderCard).join('') : emptyState('search', 'Nada detectado', `Nenhum item de ${title.toLowerCase()} foi encontrado nos caminhos configurados.`)}</div>${recs}`, action);
+  return shell(title, subtitle, `<div class="${items.length ? 'cards' : 'surface'}">${items.length ? items.map(renderCard).join('') : emptyState('search', 'Nada detectado', `Nenhum item de ${title.toLowerCase()} foi encontrado nos caminhos configurados.`, scanCta)}</div>${recs}`, action);
 }
 const SKILL_CAT = [[/ui|design|polish/i, 'UI / Design', 'design'], [/alm|finance|report|dashboard|dv01/i, 'ALM / Finance', 'chart'], [/review|pr|commit/i, 'Code Review', 'shield'], [/test|verify/i, 'Testing', 'check'], [/hook/i, 'Hooks', 'hooks'], [/prompt|context/i, 'Prompting', 'chat'], [/cost|token|optim/i, 'Cost', 'droplet'], [/session|parser|scan/i, 'Session Parsing', 'sessions']];
 function skillCat(s) { const hay = `${s.name} ${s.description || ''}`; return SKILL_CAT.find(([re]) => re.test(hay)) || [, 'Skill', 'book']; }
@@ -519,6 +520,7 @@ function bind() {
   const escanear = async (b, full) => { b.disabled = true; const t = b.innerHTML; b.textContent = full ? 'Reindexando…' : 'Escaneando…'; try { const r = await api('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ full }) }); b.textContent = `${r.indexados} indexadas · ${r.erros} erros`; setTimeout(() => { b.disabled = false; b.innerHTML = t; render(); }, 1600); } catch (err) { b.disabled = false; b.innerHTML = t; alert(err.message); } };
   $('#scan')?.addEventListener('click', (e) => escanear(e.currentTarget, false));
   $('#scan-full')?.addEventListener('click', (e) => escanear(e.currentTarget, true));
+  document.querySelector('[data-scan-cta]')?.addEventListener('click', (e) => escanear(e.currentTarget, false));
   let deb; $('#search')?.addEventListener('input', (e) => { clearTimeout(deb); const v = e.target.value; deb = setTimeout(() => { filters.q = v; goto(page, filters); }, 320); });
   $('#status')?.addEventListener('change', (e) => { filters.status = e.target.value; goto(page, filters); });
   $('#prompt-form')?.addEventListener('submit', async (e) => { e.preventDefault(); await api('/api/prompts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.fromEntries(new FormData(e.target))) }); render(); });
