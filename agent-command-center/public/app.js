@@ -467,7 +467,13 @@ async function render(quiet) {
     else html = await settingsView();
     if (g !== gen) return;
     $('#app').innerHTML = html; bind();
-  } catch (e) { if (g !== gen) return; $('#app').innerHTML = emptyState('alert', 'Erro visível', e.message); }
+  } catch (e) {
+    if (g !== gen) return;
+    const offline = /fetch|network|load failed/i.test(e.message || '');
+    const msg = offline ? 'Não foi possível falar com o servidor local. Verifique se ele está rodando em 127.0.0.1.' : e.message;
+    $('#app').innerHTML = emptyState('alert', offline ? 'Sem conexão com o servidor' : 'Algo falhou', msg, '<button class="primary" id="retry">Tentar de novo</button>');
+    $('#retry')?.addEventListener('click', () => render());
+  }
 }
 
 /* ---------- bind ---------- */
