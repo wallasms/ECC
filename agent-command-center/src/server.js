@@ -26,7 +26,15 @@ const default_settings = {
   },
   agent_paths: [join(homedir(), '.claude', 'agents'), join(ROOT, 'templates', 'claude', 'agents')],
   hook_paths: [join(homedir(), '.claude', 'settings.json'), join(dirname(ROOT), 'hooks', 'hooks.json')],
-  project_roots: [dirname(ROOT)], scan_on_start: true
+  project_roots: [dirname(ROOT)], scan_on_start: true,
+  // USD por 1M tokens. Match por PREFIXO do id do modelo (ids reais têm sufixo de data).
+  // Estimativa de tabela pública — a UI rotula "estimado". cache_write herda input×1.25.
+  model_rates: {
+    'claude-opus-4': { input: 15, output: 75, cache_read: 1.5 },
+    'claude-sonnet': { input: 3, output: 15, cache_read: 0.3 },
+    'claude-haiku': { input: 1, output: 5, cache_read: 0.1 },
+    'gpt-5': { input: 1.25, output: 10, cache_read: 0.125 }
+  }
 };
 
 function carregar_settings() {

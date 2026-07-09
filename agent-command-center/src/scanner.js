@@ -5,6 +5,17 @@ import { analisar_jsonl, analisar_texto } from './parsers.js';
 
 const MAX_ARQUIVO = 25 * 1024 * 1024;
 
+// Custo estimado em USD. Modelo sem rate conhecido → null (NUNCA 0: 0 gravado
+// polui o HAVING do dashboard e viola o "never fabricate data" do roadmap).
+function custo_estimado(sessao, rates) {
+  if (!sessao.usage || !sessao.model) return null;
+  const chave = Object.keys(rates).find((k) => sessao.model.startsWith(k));
+  if (!chave) return null;
+  const r = rates[chave]; const u = sessao.usage;
+  return (u.input * (r.input || 0) + u.output * (r.output || 0)
+    + u.cache_read * (r.cache_read || 0) + u.cache_write * (r.input || 0) * 1.25) / 1_000_000;
+}
+
 function arquivos_em(raiz, extensoes, limite = 3000) {
   if (!existsSync(raiz)) return [];
   const resultado = [];
@@ -67,6 +78,7 @@ function escanear_sessoes(db, settings, run_id, full) {
           if (!full && atual?.source_mtime === stats.mtimeMs && atual?.source_size === stats.size) continue;
           const conteudo = readFileSync(arquivo, 'utf8');
           const sessao = extname(arquivo) === '.jsonl' ? analisar_jsonl(conteudo, arquivo, stats, source) : analisar_texto(conteudo, arquivo, stats, source);
+          sessao.cost = custo_estimado(sessao, settings.model_rates || {});
           salvar_sessao(db, sessao, stats); indexados += 1;
         } catch (erro) {
           erros += 1;

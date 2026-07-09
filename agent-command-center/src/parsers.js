@@ -131,6 +131,36 @@ function arquivos_de_tools(registros) {
   return [...out].slice(0, 100);
 }
 
+// Extrai tokens com a semântica CERTA de cada agente:
+// - Claude: usage vem em message.usage por mensagem assistant; campos disjuntos
+//   (input NÃO inclui cache) → somar tudo entre as mensagens.
+// - Codex: token_count.info.total_token_usage é CUMULATIVO → vale o ÚLTIMO;
+//   e input_tokens JÁ INCLUI cached_input_tokens → normaliza p/ não-cacheado
+//   para o cálculo de custo não cobrar o cache duas vezes.
+function extrair_usage(registros) {
+  let claude = null;
+  for (const r of registros) {
+    const u = r?.message?.usage;
+    if (u && typeof u === 'object') {
+      claude = claude || { input: 0, output: 0, cache_read: 0, cache_write: 0 };
+      claude.input += u.input_tokens || 0;
+      claude.output += u.output_tokens || 0;
+      claude.cache_read += u.cache_read_input_tokens || 0;
+      claude.cache_write += u.cache_creation_input_tokens || 0;
+    }
+  }
+  if (claude) return { ...claude, total: claude.input + claude.output + claude.cache_read + claude.cache_write };
+  const tc = [...registros].reverse().find((r) => r?.payload?.type === 'token_count' && r.payload.info?.total_token_usage);
+  if (tc) {
+    const u = tc.payload.info.total_token_usage;
+    const cached = u.cached_input_tokens || 0;
+    return { input: Math.max(0, (u.input_tokens || 0) - cached), output: u.output_tokens || 0, cache_read: cached, cache_write: 0, total: u.total_tokens || 0 };
+  }
+  const legado = registros.map((r) => r?.payload?.usage || r?.usage).find(Boolean);
+  if (legado) return { input: 0, output: 0, cache_read: 0, cache_write: 0, total: legado.total_tokens || legado.totalTokenCount || 0 };
+  return null;
+}
+
 export function analisar_jsonl(conteudo, arquivo, stats, origem_forcada) {
   const avisos = [];
   const registros = [];
@@ -155,16 +185,16 @@ export function analisar_jsonl(conteudo, arquivo, stats, origem_forcada) {
     return [p?.name, p?.tool_name, p?.type === 'function_call' ? p?.name : null].filter(Boolean);
   }))].slice(0, 50);
   const files = arquivos_de_tools(registros);
-  const token_obj = registros.map((r) => r?.payload?.usage || r?.usage).find(Boolean) || {};
+  const usage = extrair_usage(registros);
   return {
     id: meta.id || registros.find((r) => r?.sessionId)?.sessionId || basename(arquivo, '.jsonl'),
     source: origem, source_path: arquivo, project_path,
     title: titulo(primeiro, basename(arquivo, '.jsonl')),
     status: status_por_eventos(eventos, atualizado_em),
-    model: registros.find((r) => r?.type === 'turn_context')?.payload?.model || meta.model || registros.find((r) => r?.model)?.model || null,
+    model: registros.find((r) => r?.type === 'turn_context')?.payload?.model || meta.model || registros.find((r) => r?.message?.model)?.message?.model || registros.find((r) => r?.model)?.model || null,
     effort: registros.find((r) => r?.payload?.effort)?.payload?.effort || null,
     created_at: criado_em, updated_at: atualizado_em,
-    tokens: token_obj.total_tokens || token_obj.totalTokenCount || null, cost: null,
+    tokens: usage?.total || null, usage, cost: null,
     snippet: titulo(eventos.at(-1)?.summary || primeiro, 'not detected'),
     tools, files, warnings: avisos, events: eventos.slice(-500)
   };

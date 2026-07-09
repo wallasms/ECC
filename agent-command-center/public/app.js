@@ -238,7 +238,7 @@ async function dashboard() {
     ['Concluídas', d.stats.completed, '--st-completed', 'check', { status: 'completed' }],
     ['Falhas', d.stats.failed, '--st-failed', 'alert', { status: 'failed' }],
     ['Tokens', d.stats.tokens.toLocaleString('pt-BR'), '--accent', 'chart', null],
-    ['Custo', d.stats.cost ? usd(d.stats.cost) : 'não detectado', '--accent', 'droplet', null],
+    ['Custo est.', d.stats.cost ? usd(d.stats.cost) : 'não detectado', '--accent', 'droplet', null],
   ];
   const stats = `<div class="stats">${cards.map(([k, v, a, i, f]) => `<div class="stat${f ? ' clickable' : ''}"${a ? ` style="--stat-accent:var(${a})"` : ''}${f ? ` data-goto-sessions='${JSON.stringify(f)}' tabindex="0" role="button"` : ''}>
     <div class="stat-top">${ic(i)}<span class="lbl">${k}</span></div>${Number.isInteger(v) ? `<b data-count="${v}">0</b>` : `<b>${v}</b>`}</div>`).join('')}</div>`;
@@ -549,7 +549,7 @@ async function detail(id) {
     const s = await api('/api/sessions/' + encodeURIComponent(id));
     detailState = { s, tab: 'timeline' };
     const b = brand(s.source);
-    const meta = [['Agente', b.label], ['Status', STATUS_LABEL[s.status] || s.status], ['Modelo', s.model || 'não detectado'], ['Esforço', s.effort || 'não detectado'], ['Tokens', s.tokens ? s.tokens.toLocaleString('pt-BR') : 'não detectado'], ['Custo', s.cost ? usd(s.cost) : 'não detectado'], ['Projeto', s.project || 'não detectado'], ['Eventos', s.events.length]];
+    const meta = [['Agente', b.label], ['Status', STATUS_LABEL[s.status] || s.status], ['Modelo', s.model || 'não detectado'], ['Esforço', s.effort || 'não detectado'], ['Tokens', s.tokens ? s.tokens.toLocaleString('pt-BR') : 'não detectado'], ['Custo est.', s.cost ? usd(s.cost) : 'não detectado'], ['Projeto', s.project || 'não detectado'], ['Eventos', s.events.length]];
     const counts = { timeline: s.events.length, terminal: (s.tools || []).length, files: (s.files || []).length, tools: (s.tools || []).length };
     $('#detail-content').innerHTML = `<div class="detail-scroll"><div class="detail-head glass">
       <button class="close" onclick="this.closest('dialog').close()">Fechar</button>
