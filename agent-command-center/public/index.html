@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Agent Command Center</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%236366f1'/%3E%3Cpath d='M12 5l1.6 4.4L18 11l-4.4 1.6L12 17l-1.6-4.4L6 11l4.4-1.6z' fill='white'/%3E%3C/svg%3E"><link rel="stylesheet" href="/styles.css"></head>
+<body>
+  <aside>
+    <header><span class="mark">A</span><div><strong>Agent Command Center</strong><small>Quiet Command</small></div></header>
+    <nav id="nav"></nav>
+    <footer><span class="dot working"></span><div><strong>Local e privado</strong><small>127.0.0.1</small></div><div class="foot-actions"><button id="theme" class="theme-toggle" title="Alternar tema claro/escuro" aria-label="Alternar tema">◐</button></div></footer>
+  </aside>
+  <main>
+    <div class="topbar">
+      <div class="command" id="command"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg><input id="command-input" placeholder="Buscar ou perguntar…"><kbd>/</kbd></div>
+      <div class="topbar-spacer"></div>
+      <button class="pill-btn" id="palette-btn" title="Paleta de comandos (⌘K)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3Z"/></svg>Comandos<kbd>⌘K</kbd></button>
+    </div>
+    <div id="app"><div class="skeleton"></div><div class="skeleton tall"></div></div>
+  </main>
+  <dialog id="detail"><div id="detail-content"></div></dialog>
+  <dialog id="palette" class="palette"><div class="palette-inner glass"><div class="palette-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg><input id="palette-input" placeholder="Ir para…" aria-label="Paleta de comandos"></div><div class="palette-list" id="palette-list"></div></div></dialog>
+  <script type="module" src="/app.js"></script>
+</body></html>

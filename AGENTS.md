@@ -4,6 +4,25 @@ This is a **production-ready AI coding plugin** providing 67 specialized agents,
 
 **Version:** 2.0.0
 
+## Project Overrides (highest precedence)
+
+- **Ponytail full:** apply YAGNI, reuse existing code, prefer stdlib/native
+  features/already-installed dependencies, and ship the smallest correct diff.
+- Understand the full affected flow before editing and fix root causes at the
+  shared point. Do not simplify security, validation, accessibility, data-loss
+  prevention, or explicit requirements.
+- Do not create abstractions, dependencies, scaffolding, files, or tests “for
+  later”. Non-trivial logic gets the smallest relevant executable test.
+- **RTK:** prefix every supported shell command with `rtk`. Use
+  `rtk proxy <command>` only when unfiltered output is necessary.
+- Use subagents only when the user explicitly requests delegation or parallel
+  agent work. Prefer direct execution to reduce context and token consumption.
+- Communicate in concise, technical pt-BR. For code tasks, lead with the result
+  and keep the explanation short unless the user asks for a report.
+- These project overrides supersede conflicting ECC defaults below, especially
+  automatic delegation, mandatory TDD/80% coverage for trivial changes, and
+  speculative architecture.
+
 ## Core Principles
 
 1. **Agent-First** — Delegate to specialized agents for domain tasks
