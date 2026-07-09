@@ -77,4 +77,18 @@ test('contratos /api/* (sort, busca em eventos, custo, scan full)', async (t) =>
   assert.ok(Number.isInteger(scan.run_id) && 'indexados' in scan && 'erros' in scan);
   // scan de paths vazios não apaga as sessões semeadas
   assert.equal((await get('')).length, 3);
+
+  // SSE: id inexistente → 404
+  const semStream = await fetch(`${BASE}/api/sessions/nao-existe/stream`);
+  assert.equal(semStream.status, 404);
+  await semStream.body?.cancel();
+
+  // SSE: sessão real → text/event-stream + primeiro data: (source_path não existe → missing:true)
+  const ctrl = new AbortController();
+  const stream = await fetch(`${BASE}/api/sessions/s-c/stream`, { signal: ctrl.signal });
+  assert.equal(stream.status, 200);
+  assert.match(stream.headers.get('content-type'), /text\/event-stream/);
+  const chunk = await stream.body.getReader().read();
+  assert.match(Buffer.from(chunk.value).toString('utf8'), /data:/);
+  ctrl.abort();
 });

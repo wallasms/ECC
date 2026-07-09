@@ -79,8 +79,13 @@ function extrair_conteudo(registro, payload, role) {
       try { const o = JSON.parse(args); args = o.input ?? o.command ?? o.patch ?? o.code ?? o.file_path ?? JSON.stringify(o); } catch { /* mantém string bruta */ }
       return `$ ${payload.name || 'call'}${args ? `\n${args}` : ''}`;
     }
-    case 'custom_tool_call_output': case 'function_call_output':
-      return texto(payload.output) || (typeof payload.output === 'string' ? payload.output : '');
+    case 'custom_tool_call_output': case 'function_call_output': {
+      // output às vezes é string JSON {"output":"...","metadata":{"exit_code":N}} — desembrulha.
+      let out = typeof payload.output === 'string' ? payload.output : texto(payload.output);
+      let erro = false;
+      try { const o = JSON.parse(out); if (typeof o.output === 'string') { erro = Number(o.metadata?.exit_code) > 0; out = o.output; } } catch { /* string simples */ }
+      return (erro ? '⛔ ' : '') + out;
+    }
     case 'patch_apply_end': return `$ apply_patch${payload.stdout ? `\n${payload.stdout}` : ''}${payload.stderr ? `\n${payload.stderr}` : ''}`;
     case 'web_search_end': return `🔍 ${payload.query || payload.action?.url || 'busca'}`;
     case 'mcp_tool_call_end': return `$ ${payload.invocation?.server || 'mcp'}.${payload.invocation?.tool || ''}`;
@@ -94,12 +99,22 @@ function extrair_conteudo(registro, payload, role) {
 
 export function normalizar_evento(registro, posicao) {
   const payload = registro?.payload || registro?.message || registro;
-  const role = payload?.role || registro?.role || (payload?.type === 'user_message' ? 'user' : null);
-  const kind = registro?.type || payload?.type || role || 'event';
+  let role = payload?.role || registro?.role || (payload?.type === 'user_message' ? 'user' : null);
+  let kind = registro?.type || payload?.type || role || 'event';
   // Preserva quebras de linha (código/output), colapsa só espaços horizontais.
   const bruto = redigir(extrair_conteudo(registro, payload, role)).replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
-  // Patches, diffs e comandos ganham mais espaço para mostrar o código; prosa fica enxuta.
-  const limite = /(\*\*\* (Begin Patch|Update File|Add File|Delete File)|\n@@ |^\$ )/.test(bruto) ? 2200 : 600;
+  // tool_result vem em registro role:user — sem isso a UI pinta output de Bash como prompt.
+  const blocos = registro?.message?.content;
+  if (Array.isArray(blocos) && blocos.some((b) => b?.type === 'tool_result')) {
+    kind = blocos.some((b) => b?.type === 'tool_result' && b.is_error) ? 'stderr' : 'stdout';
+    role = null;
+  }
+  // Codex: outputs de tool viram stdout/stderr (⛔ vem do exit_code>0 em extrair_conteudo).
+  if (payload?.type === 'function_call_output' || payload?.type === 'custom_tool_call_output') {
+    kind = bruto.startsWith('⛔') ? 'stderr' : 'stdout';
+  }
+  // Patches, diffs, comandos e outputs ganham mais espaço para mostrar o código; prosa fica enxuta.
+  const limite = /(\*\*\* (Begin Patch|Update File|Add File|Delete File)|\n@@ |^\$ )/.test(bruto) || kind === 'stdout' || kind === 'stderr' ? 2200 : 600;
   const summary = bruto.slice(0, limite);
   return {
     position: posicao,

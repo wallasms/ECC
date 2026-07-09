@@ -54,6 +54,8 @@ const nav = [
 ];
 const ids = nav.map((n) => n[1]);
 let page = 'dashboard'; let filters = {}; let gen = 0;
+// Windowing manual da tabela de Sessões (>200 itens). row_h fixo em CSS (.vrows .row).
+const VT = { data: [], row_h: 56, buffer: 10, container: null, cleanup: null };
 function readHash() { const [p, qs] = location.hash.slice(1).split('?'); page = ids.includes(p) ? p : 'dashboard'; filters = Object.fromEntries(new URLSearchParams(qs || '')); }
 function goto(p, f = {}) { const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString(); const h = '#' + p + (qs ? '?' + qs : ''); if (h === location.hash) render(); else location.hash = h; }
 readHash();
@@ -123,10 +125,11 @@ function termLines(s) {
   const lines = [];
   for (const t of (s.tools || []).slice(0, 4)) lines.push({ t: 'cmd', text: t });
   const evs = s.events || [];
-  const outEv = [...evs].reverse().find((e) => e.summary && e.role !== 'user') || evs.at(-1);
+  const outs = evs.filter((e) => e.kind === 'stdout' || e.kind === 'stderr');
+  const outEv = outs.at(-1) || [...evs].reverse().find((e) => e.summary && e.role !== 'user') || evs.at(-1);
   const out = (outEv && outEv.summary) || s.snippet || '';
   if (out) {
-    const cls = s.status === 'failed' ? 'err' : s.status === 'completed' ? 'ok' : 'out';
+    const cls = outEv?.kind === 'stderr' || s.status === 'failed' ? 'err' : s.status === 'completed' ? 'ok' : 'out';
     for (const l of String(out).split(/\r?\n/).slice(0, 5)) if (l.trim()) lines.push({ t: cls, text: l.slice(0, 200) });
   }
   return lines;
@@ -219,6 +222,16 @@ function sessionRow(s) {
 function th(label, key) { const on = filters.sort === key || (!filters.sort && key === 'updated_at'); const arrow = on ? (filters.dir === 'asc' ? ' ↑' : ' ↓') : ''; return `<span class="sortable" data-sort="${key}"${key ? ' tabindex="0" role="button"' : ''}>${label}${arrow}</span>`; }
 function tableHead() { return `<div class="row head">${th('', '')}${th('Sessão', 'title')}<span>Status</span>${th('Agente', 'source')}<span>Modelo</span>${th('Projeto', 'project')}<span></span>${th('Atividade', 'updated_at')}</div>`; }
 function tabela(items, sortable) { return `<div class="surface">${sortable ? tableHead() : ''}${items.length ? items.map(sessionRow).join('') : emptyState('sessions', 'Nenhuma sessão', 'Ajuste os filtros ou reescaneie para indexar novas sessões.', scanCta)}</div>`; }
+// Tabela janelada: só as linhas visíveis + buffer são renderizadas; spacers de altura fixa
+// preservam a barra de scroll. tableHead fica FORA de #vrows (não é destruído no repaint).
+const absTop = (el) => el.getBoundingClientRect().top + window.scrollY;
+function tabelaVirtual(items) { VT.data = items; return `<div class="surface">${tableHead()}<div class="vrows" id="vrows" style="position:relative"></div></div>`; }
+function paintWindow() {
+  const c = VT.container; if (!c) return;
+  const inicio = Math.max(0, Math.floor((window.scrollY - absTop(c)) / VT.row_h) - VT.buffer);
+  const fim = Math.min(VT.data.length, inicio + Math.ceil(innerHeight / VT.row_h) + 2 * VT.buffer);
+  c.innerHTML = `<div style="height:${inicio * VT.row_h}px"></div>${VT.data.slice(inicio, fim).map(sessionRow).join('')}<div style="height:${(VT.data.length - fim) * VT.row_h}px"></div>`;
+}
 
 /* ---------- Dashboard ---------- */
 async function dashboard() {
@@ -264,7 +277,8 @@ async function sessions() {
     <div class="segmented">${seg('', 'Todos')}${seg('claude', 'Claude', 'spark')}${seg('codex', 'Codex', 'chevron')}</div>
     <input class="search" id="search" placeholder="Buscar sessões, comandos, saída…" value="${esc(filters.q || '')}">
     <select id="status"><option value="">Todos os status</option>${['working', 'needs_input', 'completed', 'failed', 'stale', 'unknown'].map((x) => `<option value="${x}" ${filters.status === x ? 'selected' : ''}>${STATUS_LABEL[x]}</option>`).join('')}</select></div>`;
-  return shell('Sessões', `${data.length} sessões indexadas localmente.`, `${toolbar}${tabela(data, true)}`);
+  const corpo = data.length > 200 ? tabelaVirtual(data) : tabela(data, true);
+  return shell('Sessões', `${data.length} sessões indexadas localmente.`, `${toolbar}${corpo}`);
 }
 
 /* ---------- Studio ---------- */
@@ -279,7 +293,8 @@ async function studio() {
 /* ---------- Ao Vivo: real-time terminal wall ----------
    Tails the actual session .jsonl files as agents append to them, via
    /api/sessions/:id/tail?from=<offset>. Real data, redacted server-side. */
-const LIVE = { timers: [], paused: new Set(), stop() { this.timers.forEach(clearInterval); this.timers = []; this.paused.clear(); } };
+const LIVE = { timers: [], sources: [], paused: new Set(),
+  stop() { this.timers.forEach(clearInterval); this.sources.forEach((e) => e.close()); this.timers = []; this.sources = []; this.paused.clear(); } };
 let liveFilter = '';
 function filterBody(body) {
   body.querySelectorAll('.term-line').forEach((el) => {
@@ -290,6 +305,8 @@ function filterBody(body) {
 }
 function applyLiveFilter() { document.querySelectorAll('.live-body').forEach(filterBody); }
 function liveLineClass(e) {
+  if (e.kind === 'stderr') return 'err';
+  if (e.kind === 'stdout') return 'out';
   const h = `${e.kind} ${e.role || ''}`.toLowerCase();
   if (/error|fail|exception|panic|traceback/.test(h)) return 'err';
   if (/tool|function_call|apply_patch|patch|bash|shell|exec|command/.test(h)) return 'cmd';
@@ -347,25 +364,38 @@ function startLive() {
     const dot = panel.querySelector('.term-src .st');
     const freshness = () => { const at = Number(body.dataset.lastAt || 0); if (!at || !caret) return; const s = Math.round((Date.now() - at) / 1000); caret.textContent = s < 3 ? ' · ativo agora' : ` · última linha há ${s}s`; };
     let cleared = false; let recent = [];
-    const poll = async () => {
-      if (LIVE.paused.has(id) || document.hidden) return; // não consome CPU em aba oculta
-      try {
-        const r = await api(`/api/sessions/${encodeURIComponent(id)}/tail?from=${body.dataset.offset || 0}`);
-        body.dataset.offset = r.offset;
-        if (r.missing && !cleared) { body.innerHTML = '<div class="term-line err"><span class="gutter">!</span><span>arquivo de sessão não encontrado</span></div>'; cleared = true; return; }
-        if (r.lines.length) {
-          if (!cleared) { body.innerHTML = ''; cleared = true; }
-          appendLiveLines(body, r.lines);
-          body.dataset.lastAt = Date.now();
-          recent = recent.concat(r.lines.map((l) => l.summary)).slice(-25);
-          const st = liveStatus(recent); // recomputa status ao vivo, sem esperar rescan
-          if (dot && !dot.classList.contains(st)) dot.className = 'st ' + st;
-        }
-        freshness();
-      } catch { /* mantém tentando no próximo tick */ }
+    // Aplica um delta (do SSE ou do poll) ao painel — idempotente por offset.
+    const aplicar = (r) => {
+      if (LIVE.paused.has(id) || document.hidden) return; // aba oculta/pausado: ignora barato
+      body.dataset.offset = r.offset;
+      if (r.missing && !cleared) { body.innerHTML = '<div class="term-line err"><span class="gutter">!</span><span>arquivo de sessão não encontrado</span></div>'; cleared = true; return; }
+      if (r.lines.length) {
+        if (!cleared) { body.innerHTML = ''; cleared = true; }
+        appendLiveLines(body, r.lines);
+        body.dataset.lastAt = Date.now();
+        recent = recent.concat(r.lines.map((l) => l.summary)).slice(-25);
+        const st = liveStatus(recent); // recomputa status ao vivo, sem esperar rescan
+        if (dot && !dot.classList.contains(st)) dot.className = 'st ' + st;
+      }
+      freshness();
     };
-    poll();
-    LIVE.timers.push(setInterval(poll, 1400));
+    const iniciarPoll = () => {
+      const poll = async () => {
+        if (LIVE.paused.has(id) || document.hidden) return; // não consome CPU em aba oculta
+        try { aplicar(await api(`/api/sessions/${encodeURIComponent(id)}/tail?from=${body.dataset.offset || 0}`)); }
+        catch { /* mantém tentando no próximo tick */ }
+      };
+      poll();
+      LIVE.timers.push(setInterval(poll, 1400));
+    };
+    // SSE primário; após 3 erros consecutivos cai para o poll de 1,4s (fallback intacto).
+    if (window.EventSource) {
+      let falhas = 0;
+      const es = new EventSource(`/api/sessions/${encodeURIComponent(id)}/stream?from=${body.dataset.offset || 0}`);
+      es.onmessage = (ev) => { falhas = 0; try { aplicar(JSON.parse(ev.data)); } catch { /* payload inválido, ignora */ } };
+      es.onerror = () => { falhas += 1; if (falhas >= 3) { es.close(); LIVE.sources = LIVE.sources.filter((s) => s !== es); iniciarPoll(); } };
+      LIVE.sources.push(es);
+    } else { iniciarPoll(); }
     LIVE.timers.push(setInterval(freshness, 1000));
     body.addEventListener('scroll', () => { if (body.scrollHeight - body.scrollTop - body.clientHeight < 40) panel.classList.remove('has-new'); });
   });
@@ -469,24 +499,108 @@ function designSystem() {
 }
 
 /* ---------- Timeline event ---------- */
-const EVENT_KIND = [[/error|fail|exception|panic/i, 'k-error', 'alert', 'Erro'], [/complete|done|abort|finish/i, 'k-complete', 'check', 'Concluído'], [/user|prompt/i, 'k-user', 'chat', 'Prompt'], [/bash|shell|exec|command|term/i, 'k-term', 'terminal', 'Terminal'], [/tool|function_call|apply_patch|patch/i, 'k-tool', 'tool', 'Tool'], [/hook/i, 'k-hook', 'hooks', 'Hook'], [/skill/i, 'k-skill', 'book', 'Skill'], [/subagent|agent/i, 'k-agent', 'agents', 'Subagente'], [/assistant|message|response/i, 'k-assistant', 'spark', 'Resposta']];
-function eventBody(summary) {
-  if (!isDiff(summary)) return `<pre>${esc(summary)}</pre>`;
-  const body = String(summary).split(/\n/).map((l) => { const dc = diffLineClass(l); return `<span class="dl${dc ? ' ' + dc : ''}">${esc(l) || ' '}</span>`; }).join('');
-  return `<pre class="diff">${body}</pre>`;
+const EVENT_KIND = [[/^stderr\b/, 'k-error', 'terminal', 'stderr'], [/^stdout\b/, 'k-term', 'terminal', 'stdout'], [/error|fail|exception|panic/i, 'k-error', 'alert', 'Erro'], [/complete|done|abort|finish/i, 'k-complete', 'check', 'Concluído'], [/user|prompt/i, 'k-user', 'chat', 'Prompt'], [/bash|shell|exec|command|term/i, 'k-term', 'terminal', 'Terminal'], [/tool|function_call|apply_patch|patch/i, 'k-tool', 'tool', 'Tool'], [/hook/i, 'k-hook', 'hooks', 'Hook'], [/skill/i, 'k-skill', 'book', 'Skill'], [/subagent|agent/i, 'k-agent', 'agents', 'Subagente'], [/assistant|message|response/i, 'k-assistant', 'spark', 'Resposta']];
+// Diff estruturado — parse por linha tipada, pareamento -/+ e realce por palavra.
+const sbsOpen = new Set(); // índices de eventos do timeline em modo side-by-side
+function parseDiff(summary) {
+  return String(summary).split(/\n/).map((l) => {
+    const dc = diffLineClass(l); // hunk/phdr/add/del já existe
+    if (dc === 'add' || dc === 'del') return { t: dc, s: l.slice(1) };
+    if (dc) return { t: dc, s: l }; // hunk/phdr mantêm o marcador
+    if (/^\$ /.test(l)) return { t: 'cmd', s: l };
+    return { t: 'ctx', s: l };
+  });
 }
-function timelineEvent(e) {
+// Casa runs contíguos de del com o run de add seguinte (vale p/ Edit e p/ hunk do apply_patch).
+function parearDiff(linhas) {
+  const par = new Array(linhas.length).fill(-1);
+  let k = 0;
+  while (k < linhas.length) {
+    if (linhas[k].t === 'del') {
+      const dels = []; while (k < linhas.length && linhas[k].t === 'del') dels.push(k++);
+      const adds = []; while (k < linhas.length && linhas[k].t === 'add') adds.push(k++);
+      for (let m = 0; m < Math.min(dels.length, adds.length); m++) { par[dels[m]] = adds[m]; par[adds[m]] = dels[m]; }
+    } else k += 1;
+  }
+  return par;
+}
+// Realça só o miolo que difere. ponytail: prefixo/sufixo comum, não LCS — basta p/ edits típicos.
+function marcarPar(a, b) {
+  let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i += 1;
+  let j = 0; while (j < a.length - i && j < b.length - i && a[a.length - 1 - j] === b[b.length - 1 - j]) j += 1;
+  if (i + j === 0) return null; // 100% diferentes: sem <mark> gigante inútil
+  const wrap = (s) => `${esc(s.slice(0, i))}<mark>${esc(s.slice(i, s.length - j))}</mark>${esc(s.slice(s.length - j))}`;
+  return [wrap(a), wrap(b)];
+}
+function marcarLado(ln, linhas, par) {
+  const p = par[ln.idx];
+  if (p < 0) return null;
+  const m = ln.t === 'del' ? marcarPar(ln.s, linhas[p].s) : marcarPar(linhas[p].s, ln.s);
+  if (!m) return null;
+  return ln.t === 'del' ? m[0] : m[1];
+}
+// Segmenta por cabeçalho de hunk (@@ / *** File) p/ colapso nativo com <details>.
+function agruparHunks(linhas) {
+  const segs = []; let cur = { header: null, lines: [] };
+  linhas.forEach((ln, idx) => {
+    if (ln.t === 'hunk' || ln.t === 'phdr') { if (cur.header || cur.lines.length) segs.push(cur); cur = { header: ln, lines: [] }; }
+    else cur.lines.push({ ...ln, idx });
+  });
+  if (cur.header || cur.lines.length) segs.push(cur);
+  return segs;
+}
+function linhaUnified(ln, linhas, par) {
+  const cls = ['add', 'del', 'cmd'].includes(ln.t) ? ln.t : '';
+  const sign = ln.t === 'add' ? '+' : ln.t === 'del' ? '-' : '';
+  const html = ((ln.t === 'add' || ln.t === 'del') && marcarLado(ln, linhas, par)) || esc(ln.s);
+  return `<span class="dl${cls ? ' ' + cls : ''}">${sign}${html || ' '}</span>`;
+}
+function linhasSbs(lines, linhas, par) {
+  const rows = [];
+  for (const ln of lines) {
+    if (ln.t === 'del') {
+      const p = par[ln.idx];
+      if (p >= 0) { const m = marcarPar(ln.s, linhas[p].s); const l = m ? m[0] : esc(ln.s), r = m ? m[1] : esc(linhas[p].s); rows.push(`<span class="dl del">-${l || ' '}</span><span class="dl add">+${r || ' '}</span>`); }
+      else rows.push(`<span class="dl del">-${esc(ln.s) || ' '}</span><span class="dl empty"></span>`);
+    } else if (ln.t === 'add') {
+      if (par[ln.idx] >= 0) continue; // já renderizado ao lado do seu del
+      rows.push(`<span class="dl empty"></span><span class="dl add">+${esc(ln.s) || ' '}</span>`);
+    } else if (ln.t === 'cmd') rows.push(`<span class="dl cmd full">${esc(ln.s)}</span>`);
+    else rows.push(`<span class="dl full">${esc(ln.s) || ' '}</span>`);
+  }
+  return rows.join('');
+}
+function renderDiff(summary, sbs) {
+  const linhas = parseDiff(summary);
+  const par = parearDiff(linhas);
+  const gridCls = sbs ? 'diff diff-sbs' : 'diff';
+  const bloco = (lines) => sbs ? linhasSbs(lines, linhas, par) : lines.map((ln) => linhaUnified(ln, linhas, par)).join('');
+  const parts = agruparHunks(linhas).map((seg) => {
+    if (!seg.header) return `<div class="${gridCls}">${bloco(seg.lines)}</div>`;
+    const open = seg.lines.length > 25 ? '' : ' open'; // hunks longos nascem fechados
+    return `<details${open}><summary>${esc(seg.header.s)}</summary><div class="${gridCls}">${bloco(seg.lines)}</div></details>`;
+  });
+  return `<div class="diff-wrap">${parts.join('')}</div>`;
+}
+function eventBody(summary, sbs) {
+  if (!isDiff(summary)) return `<pre>${esc(summary)}</pre>`;
+  return renderDiff(summary, !!sbs);
+}
+function timelineEvent(e, i) {
   const hay = `${e.kind} ${e.role || ''}`;
   const [, cls, glyph, label] = EVENT_KIND.find(([re]) => re.test(hay)) || [, 'k-event', 'chevron', e.kind];
-  return `<div class="event ${cls}" data-kind="${esc(e.kind)}"><span class="ev-icon">${ic(glyph)}</span>
-    <div class="ev-head"><b>${esc(label)}</b>${e.role ? `<span class="role">· ${esc(e.role)}</span>` : ''}${e.timestamp ? `<small>${fmt(e.timestamp)}</small>` : ''}</div>
-    ${eventBody(e.summary)}</div>`;
+  const toggle = isDiff(e.summary) ? `<button class="link-btn" data-diff-toggle="${i}">${sbsOpen.has(i) ? 'unificado' : 'lado a lado'}</button>` : '';
+  return `<div class="event ${cls}" data-kind="${esc(e.kind)}" data-ev="${i}"><span class="ev-icon">${ic(glyph)}</span>
+    <div class="ev-head"><b>${esc(label)}</b>${e.role ? `<span class="role">· ${esc(e.role)}</span>` : ''}${e.timestamp ? `<small>${fmt(e.timestamp)}</small>` : ''}${toggle}</div>
+    <div class="ev-body">${eventBody(e.summary, sbsOpen.has(i))}</div></div>`;
 }
 
 /* ---------- render ---------- */
 async function render(quiet) {
   const g = ++gen;
   LIVE.stop(); kbRow = -1;
+  VT.cleanup?.(); VT.cleanup = null; VT.container = null; // remove scroll listener da render anterior
+  const savedY = quiet && page === 'sessions' ? window.scrollY : null; // auto-refresh preserva posição
   document.querySelectorAll('.nav').forEach((b) => b.classList.toggle('active', b.dataset.page === page));
   if (!quiet) $('#app').innerHTML = skeletonFor(page);
   try {
@@ -504,6 +618,7 @@ async function render(quiet) {
     else html = await settingsView();
     if (g !== gen) return;
     $('#app').innerHTML = html; bind();
+    if (savedY != null) { window.scrollTo(0, savedY); if (VT.container) paintWindow(); } // repinta na posição restaurada
   } catch (e) {
     if (g !== gen) return;
     const offline = /fetch|network|load failed/i.test(e.message || '');
@@ -516,7 +631,7 @@ async function render(quiet) {
 /* ---------- bind ---------- */
 function bind() {
   const key = (el) => { el.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); } }; };
-  document.querySelectorAll('[data-session]').forEach((r) => { r.onclick = () => detail(r.dataset.session); key(r); });
+  document.querySelectorAll('[data-session]').forEach((r) => { if (r.closest('#vrows')) return; r.onclick = () => detail(r.dataset.session); key(r); });
   document.querySelectorAll('[data-goto]').forEach((b) => { b.onclick = () => goto(b.dataset.goto); });
   document.querySelectorAll('[data-goto-sessions]').forEach((b) => { b.onclick = () => goto('sessions', JSON.parse(b.dataset.gotoSessions)); key(b); });
   document.querySelectorAll('.sortable[data-sort]:not([data-sort=""])').forEach((h) => { h.onclick = () => { const k = h.dataset.sort; if (filters.sort === k || (!filters.sort && k === 'updated_at')) filters.dir = filters.dir === 'asc' ? 'desc' : 'asc'; else { filters.sort = k; filters.dir = 'desc'; } goto(page, filters); }; key(h); });
@@ -537,6 +652,16 @@ function bind() {
   if (page === 'studio') loadStudioQueue();
   if (page === 'live') startLive();
   if (page === 'dashboard') animateCounts();
+  if (page === 'sessions' && $('#vrows')) { // tabela janelada: delegação + repintura no scroll
+    VT.container = $('#vrows');
+    VT.container.onclick = (e) => { const r = e.target.closest('[data-session]'); if (r) detail(r.dataset.session); };
+    VT.container.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { const r = e.target.closest('[data-session]'); if (r) { e.preventDefault(); detail(r.dataset.session); } } };
+    paintWindow();
+    let raf = 0;
+    const onScroll = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; paintWindow(); }); };
+    addEventListener('scroll', onScroll, { passive: true });
+    VT.cleanup = () => removeEventListener('scroll', onScroll);
+  }
 }
 function copy(text, btn) { navigator.clipboard?.writeText(text).then(() => { if (!btn) return; const o = btn.innerHTML; btn.innerHTML = ic('check') + 'Copiado'; setTimeout(() => { btn.innerHTML = o; }, 1200); }).catch(() => {}); }
 async function loadStudioQueue() { try { const q = await api('/api/prompts'); const el = $('#studio-queue'); if (el) el.outerHTML = q.length ? `<div class="cards">${q.slice(0, 6).map(promptCard).join('')}</div>` : `<div class="surface">${emptyState('prompts', 'Fila vazia', 'Adicione prompts na Prompt Queue.')}</div>`; } catch {} }
@@ -547,7 +672,7 @@ let detailState = null;
 async function detail(id) {
   try {
     const s = await api('/api/sessions/' + encodeURIComponent(id));
-    detailState = { s, tab: 'timeline' };
+    detailState = { s, tab: 'timeline' }; sbsOpen.clear();
     const b = brand(s.source);
     const meta = [['Agente', b.label], ['Status', STATUS_LABEL[s.status] || s.status], ['Modelo', s.model || 'não detectado'], ['Esforço', s.effort || 'não detectado'], ['Tokens', s.tokens ? s.tokens.toLocaleString('pt-BR') : 'não detectado'], ['Custo est.', s.cost ? usd(s.cost) : 'não detectado'], ['Projeto', s.project || 'não detectado'], ['Eventos', s.events.length]];
     const counts = { timeline: s.events.length, terminal: (s.tools || []).length, files: (s.files || []).length, tools: (s.tools || []).length };
@@ -570,6 +695,13 @@ function renderTab() {
     const kinds = [...new Set(s.events.map((e) => e.kind))].sort();
     host.innerHTML = `<div class="tabpane"><div class="toolbar"><select id="kind-filter"><option value="">Todos os tipos (${s.events.length})</option>${kinds.map((k) => `<option value="${esc(k)}">${esc(k)}</option>`).join('')}</select></div><div class="timeline">${s.events.length ? s.events.map(timelineEvent).join('') : emptyState('sessions', 'Sem eventos', 'Nenhum evento indexado para esta sessão.')}</div></div>`;
     $('#kind-filter').onchange = (ev) => { const k = ev.target.value; host.querySelectorAll('.event').forEach((el) => { el.style.display = !k || el.dataset.kind === k ? '' : 'none'; }); };
+    host.onclick = (ev) => { // toggle unified ↔ side-by-side por evento (delegado, sobrevive a re-render)
+      const btn = ev.target.closest('[data-diff-toggle]'); if (!btn) return;
+      const i = Number(btn.dataset.diffToggle);
+      if (sbsOpen.has(i)) sbsOpen.delete(i); else sbsOpen.add(i);
+      btn.textContent = sbsOpen.has(i) ? 'unificado' : 'lado a lado';
+      btn.closest('.event').querySelector('.ev-body').innerHTML = eventBody(s.events[i].summary, sbsOpen.has(i));
+    };
   } else if (tab === 'terminal') {
     host.innerHTML = `<div class="tabpane">${terminalPreview(s, { tall: true })}<p class="muted" style="margin-top:10px;font-size:11px">${ic('alert')} Reconstruído a partir do índice de eventos — stdout/stderr brutos não são capturados pelo scanner read-only.</p></div>`;
     host.querySelectorAll('[data-term-copy]').forEach((btn) => { btn.onclick = () => { const t = btn.closest('.term-panel')?.querySelector('[data-copy]')?.dataset.copy || ''; copy(t, btn); }; });
@@ -638,6 +770,7 @@ $('#palette-btn').onclick = openPalette;
 let kbRow = -1; let gPending = false;
 const GCHORD = { d: 'dashboard', l: 'live', t: 'studio', s: 'sessions', p: 'projects', k: 'skills', h: 'hooks', a: 'agents', q: 'prompts' };
 function highlightRow(rows) { rows.forEach((r) => r.classList.remove('kb')); const r = rows[kbRow]; if (r) { r.classList.add('kb'); r.scrollIntoView({ block: 'nearest' }); } }
+function highlightRowById(id) { document.querySelectorAll('#app .row.kb').forEach((r) => r.classList.remove('kb')); if (id == null) return; document.querySelector(`#vrows [data-session="${CSS.escape(id)}"]`)?.classList.add('kb'); }
 addEventListener('keydown', (e) => {
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '');
   const busy = $('#detail').open || palette.open;
@@ -647,11 +780,17 @@ addEventListener('keydown', (e) => {
   if (gPending) { gPending = false; if (GCHORD[e.key]) { e.preventDefault(); goto(GCHORD[e.key]); } return; }
   if (e.key === 'g' && !busy) { gPending = true; setTimeout(() => { gPending = false; }, 700); return; }
   if (page === 'sessions' && !busy) {
-    const rows = [...document.querySelectorAll('#app .row[data-session]')];
-    if (!rows.length) return;
-    if (e.key === 'j' || e.key === 'ArrowDown') { kbRow = Math.min(rows.length - 1, kbRow + 1); highlightRow(rows); e.preventDefault(); }
-    else if (e.key === 'k' || e.key === 'ArrowUp') { kbRow = Math.max(0, kbRow - 1); highlightRow(rows); e.preventDefault(); }
-    else if (e.key === 'Enter' && rows[kbRow]) { detail(rows[kbRow].dataset.session); e.preventDefault(); }
+    const virtual = !!$('#vrows');
+    const rows = virtual ? [] : [...document.querySelectorAll('#app .row[data-session]')];
+    const total = virtual ? VT.data.length : rows.length;
+    if (!total) return;
+    if (e.key === 'j' || e.key === 'ArrowDown') kbRow = Math.min(total - 1, kbRow + 1);
+    else if (e.key === 'k' || e.key === 'ArrowUp') kbRow = Math.max(0, kbRow - 1);
+    else if (e.key === 'Enter') { const id = virtual ? VT.data[kbRow]?.id : rows[kbRow]?.dataset.session; if (id) detail(id); e.preventDefault(); return; }
+    else return;
+    e.preventDefault();
+    if (virtual) { window.scrollTo({ top: absTop(VT.container) + kbRow * VT.row_h - innerHeight / 2 }); paintWindow(); highlightRowById(VT.data[kbRow]?.id); }
+    else highlightRow(rows);
   }
 });
 render();

@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, watch, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -173,6 +173,31 @@ async function api(req, res, url) {
     if (!out) return json(res, 404, { error: 'Sessão não encontrada' });
     return json(res, 200, out);
   }
+  if (req.method === 'GET' && /^\/api\/sessions\/.+\/stream$/.test(url.pathname)) {
+    const partes = url.pathname.split('/');
+    const id = decodeURIComponent(partes[partes.length - 2]);
+    const row = db.prepare('SELECT source_path FROM sessions WHERE id=?').get(id);
+    if (!row) return json(res, 404, { error: 'Sessão não encontrada' });
+    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'Connection': 'keep-alive' });
+    res.write('retry: 3000\n\n');
+    // Last-Event-ID = offset em bytes; reconexão do EventSource retoma de onde parou.
+    let offset = Number(req.headers['last-event-id']) || Number(url.searchParams.get('from')) || 0;
+    const enviar = () => {
+      try {
+        const out = tail_sessao(id, offset);
+        if (!out) return;
+        offset = out.offset;
+        if (out.lines.length || out.missing) res.write(`id: ${offset}\ndata: ${JSON.stringify(out)}\n\n`);
+      } catch { /* arquivo em rotação; próximo tick tenta de novo */ }
+    };
+    enviar();
+    let watcher = null;
+    try { watcher = watch(row.source_path, () => enviar()); } catch { /* arquivo pode não existir ainda */ }
+    const heartbeat = setInterval(() => res.write(': ping\n\n'), 15_000);
+    const safety = setInterval(enviar, 5_000); // fs.watch no Windows às vezes para de disparar
+    req.on('close', () => { clearInterval(heartbeat); clearInterval(safety); watcher?.close(); });
+    return; // NÃO cair no json()/404
+  }
   if (req.method === 'GET' && url.pathname.startsWith('/api/sessions/')) {
     const id = decodeURIComponent(url.pathname.split('/').at(-1));
     const session = sessao_publica(db.prepare('SELECT s.*,p.name project,p.path project_path FROM sessions s LEFT JOIN projects p ON p.id=s.project_id WHERE s.id=?').get(id));
@@ -210,7 +235,7 @@ const server = createServer(async (req, res) => {
     const arquivo = resolve(PUBLIC, relativo);
     if (!arquivo.startsWith(PUBLIC) || !existsSync(arquivo)) return json(res, 404, { error: 'Arquivo não encontrado' });
     res.writeHead(200, { 'Content-Type': mime[extname(arquivo)] || 'application/octet-stream' }); res.end(readFileSync(arquivo));
-  } catch (erro) { json(res, 500, { error: String(erro.message || erro) }); }
+  } catch (erro) { if (!res.headersSent) json(res, 500, { error: String(erro.message || erro) }); else res.end(); }
 });
 
 server.listen(PORT, HOST, () => {

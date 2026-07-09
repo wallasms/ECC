@@ -211,6 +211,7 @@ h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;
 .row{display:grid;grid-template-columns:26px minmax(200px,2.4fr) minmax(140px,1.4fr) 108px 96px 118px 88px;gap:12px;align-items:center;
   padding:11px 16px;border-bottom:1px solid var(--border-soft);font-size:13px;cursor:pointer;transition:background .1s}
 .row:last-child{border:0}
+.vrows .row{height:56px;box-sizing:border-box;overflow:hidden}
 .row:hover{background:var(--surface-2)}
 .row.kb{background:var(--accent-bg);box-shadow:inset 3px 0 0 var(--accent)}
 .row.head{cursor:default;background:transparent;border-bottom:1px solid var(--border);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600}
@@ -338,13 +339,22 @@ h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;
 .term-line.add .gutter{color:var(--term-green)}.term-line.del .gutter{color:var(--term-red)}
 .term-line.hunk{color:var(--term-accent)}.term-line.phdr{color:var(--term-amber)}
 .term-line.hit{background:color-mix(in srgb,var(--term-amber) 16%,transparent);border-radius:3px}
-/* diff/patch coloring — light timeline <pre> */
-pre.diff{display:flex;flex-direction:column}
-pre.diff .dl{display:block;padding:0 4px;border-radius:2px}
-pre.diff .dl.add{color:var(--ok-fg);background:var(--ok-bg)}
-pre.diff .dl.del{color:var(--danger-fg);background:var(--danger-bg)}
-pre.diff .dl.hunk{color:var(--accent);font-weight:600}
-pre.diff .dl.phdr{color:var(--warn-fg);font-weight:600}
+/* diff/patch coloring — light timeline <pre> e div.diff (side-by-side/hunks) */
+pre.diff,.diff{display:flex;flex-direction:column}
+.diff{font-family:var(--mono,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:12px;white-space:pre-wrap;word-break:break-word}
+pre.diff .dl,.diff .dl{display:block;padding:0 4px;border-radius:2px}
+pre.diff .dl.add,.diff .dl.add{color:var(--ok-fg);background:var(--ok-bg)}
+pre.diff .dl.del,.diff .dl.del{color:var(--danger-fg);background:var(--danger-bg)}
+pre.diff .dl.hunk,.diff .dl.hunk{color:var(--accent);font-weight:600}
+pre.diff .dl.phdr,.diff .dl.phdr{color:var(--warn-fg);font-weight:600}
+.diff-wrap details{margin:2px 0}
+.diff-wrap summary{cursor:pointer;color:var(--accent);font:600 12px/1.6 var(--mono,ui-monospace,Consolas,monospace);white-space:pre-wrap;padding:0 4px}
+.diff-sbs{display:grid;grid-template-columns:1fr 1fr;gap:0 8px}
+.diff-sbs .full{grid-column:1 / -1}
+.diff-sbs .dl.empty{background:transparent}
+.dl mark{background:transparent;border-radius:3px;padding:0}
+.dl.add mark{background:color-mix(in srgb,var(--ok-fg) 26%,transparent)}
+.dl.del mark{background:color-mix(in srgb,var(--danger-fg) 26%,transparent)}
 .term-line.lnew{animation:lnew .28s ease}
 @keyframes lnew{from{opacity:0;transform:translateY(2px)}}
 .live-btn{flex:none;border:1px solid var(--term-border);background:transparent;color:var(--term-dim);border-radius:6px;width:26px;height:22px;display:grid;place-items:center;cursor:pointer;font-size:11px;padding:0;transition:color .12s,border-color .12s}
