@@ -552,7 +552,7 @@ function appendLiveLines(body, lines) {
 }
 
 /* ---------- generic card page ---------- */
-async function cardPage(endpoint, title, subtitle, renderCard, action = '', filterFn = null, filterLabel = '') {
+async function cardPage(endpoint, title, subtitle, renderCard, action = '', filterFn = null, filterLabel = '', emptyCta = scanCta, emptyHint = '') {
   const data = await api(endpoint);
   let items = Array.isArray(data) ? data : data.installed;
   const filtrando = filterFn && filterLabel;
@@ -561,7 +561,7 @@ async function cardPage(endpoint, title, subtitle, renderCard, action = '', filt
   const recs = data.recommendations && !filtrando
     ? `<h2>Recomendações rule-based</h2><div class="cards">${data.recommendations.map((x) => `<div class="card rise"><div class="card-head"><h3><span class="card-icon">${ic('spark')}</span>${esc(x.name)}</h3><span class="score"><span class="bar"><i style="width:${Math.round((x.score || 0) * 100)}%"></i></span>${Math.round((x.score || 0) * 100)}</span></div><p>${esc(x.reason)}</p></div>`).join('')}</div>`
     : '';
-  const vazio = filtrando ? emptyState('search', 'Nenhum resultado para o filtro', 'Nenhum item corresponde ao filtro ativo. Limpe o filtro para ver todos.') : emptyState('search', 'Nada detectado', `Nenhum item de ${title.toLowerCase()} foi encontrado nos caminhos configurados.`, scanCta);
+  const vazio = filtrando ? emptyState('search', 'Nenhum resultado para o filtro', 'Nenhum item corresponde ao filtro ativo. Limpe o filtro para ver todos.') : emptyState('search', 'Nada detectado', emptyHint || `Nenhum item de ${title.toLowerCase()} foi encontrado nos caminhos configurados.`, emptyCta);
   return shell(title, subtitle, `${chip}<div class="${items.length ? 'cards' : 'surface'}">${items.length ? items.map(renderCard).join('') : vazio}</div>${recs}`, action);
 }
 const SKILL_CAT = [[/ui|design|polish/i, 'UI / Design', 'design'], [/alm|finance|report|dashboard|dv01/i, 'ALM / Finance', 'chart'], [/review|pr|commit/i, 'Code Review', 'shield'], [/test|verify/i, 'Testing', 'check'], [/hook/i, 'Hooks', 'hooks'], [/prompt|context/i, 'Prompting', 'chat'], [/cost|token|optim/i, 'Cost', 'droplet'], [/session|parser|scan/i, 'Session Parsing', 'sessions']];
@@ -613,7 +613,7 @@ function promptCard(x) {
 async function prompts() {
   const data = await api('/api/prompts');
   const form = `<form class="form" id="prompt-form"><label>Novo prompt</label><input name="title" placeholder="Título" required><textarea name="body" placeholder="Prompt"></textarea><div class="ds-row"><select name="target"><option value="either">Claude ou Codex</option><option value="codex">Codex</option><option value="claude">Claude Code</option></select><select name="priority"><option value="medium">Prioridade média</option><option value="high">Alta</option><option value="low">Baixa</option></select><button class="primary">Adicionar à fila</button></div></form>`;
-  const queue = data.length ? `<div class="cards">${data.map(promptCard).join('')}</div>` : `<div class="surface">${emptyState('prompts', 'Fila vazia', 'Prompts adicionados aparecem aqui, prontos para enviar ao Codex ou Claude Code.')}</div>`;
+  const queue = data.length ? `<div class="cards">${data.map(promptCard).join('')}</div>` : `<div class="surface">${emptyState('prompts', 'Fila vazia', 'Prompts adicionados aparecem aqui, prontos para enviar ao Codex ou Claude Code.', `<button class="primary" data-focus-prompt>${ic('prompts')}Criar primeiro prompt</button>`)}</div>`;
   return shell('Prompt Queue', 'Prepare trabalho antes de enviar aos agentes.', `${form}<h2>Fila (${data.length})</h2><div id="queue">${queue}</div>`);
 }
 
@@ -754,7 +754,9 @@ async function render(quiet) {
     else if (page === 'sessions') html = await sessions();
     else if (page === 'projects') html = await cardPage('/api/projects', 'Projetos', 'Sessões agrupadas por repositório.', projectCard, '', filters.missing_agents ? (p) => !p.agents_md : null, filters.missing_agents ? 'sem AGENTS.md' : '');
     else if (page === 'skills') html = await cardPage('/api/skills', 'Skills Finder', 'Skills instaladas e lacunas detectadas — como um App Store de skills.', skillCard, '', filters.q ? (s, f) => `${s.name} ${s.description || ''}`.toLowerCase().includes(f.q.toLowerCase()) : null, filters.q ? `“${filters.q}”` : '');
-    else if (page === 'hooks') html = await cardPage('/api/hooks', 'Hooks', 'Somente inspeção. Templates não são ativados automaticamente.', hookCard, '', (filters.q || filters.template) ? (h, f) => (!f.q || `${h.event} ${h.matcher || ''} ${h.description || ''}`.toLowerCase().includes(f.q.toLowerCase())) && (!f.template || `${h.event} ${h.matcher || ''} ${h.description || ''} ${h.source_path || ''}`.toLowerCase().includes(f.template.toLowerCase())) : null, filters.template ? `template ${filters.template}` : filters.q ? `“${filters.q}”` : '');
+    else if (page === 'hooks') html = await cardPage('/api/hooks', 'Hooks', 'Somente inspeção. Templates não são ativados automaticamente.', hookCard, '', (filters.q || filters.template) ? (h, f) => (!f.q || `${h.event} ${h.matcher || ''} ${h.description || ''}`.toLowerCase().includes(f.q.toLowerCase())) && (!f.template || `${h.event} ${h.matcher || ''} ${h.description || ''} ${h.source_path || ''}`.toLowerCase().includes(f.template.toLowerCase())) : null, filters.template ? `template ${filters.template}` : filters.q ? `“${filters.q}”` : '',
+      `<button class="primary" data-goto="settings">${ic('settings')}Conferir caminhos</button>`,
+      'Nenhum hook detectado nos caminhos configurados. Confira os hook paths em Settings — o guia vive em docs/hooks.md e os templates em templates/claude/hooks.');
     else if (page === 'agents') html = await cardPage('/api/subagents', 'Multiagents', 'Definições locais de subagentes.', subagentCard);
     else if (page === 'prompts') html = await prompts();
     else if (page === 'design') html = designSystem();
@@ -784,6 +786,7 @@ function bind() {
   document.querySelectorAll('[data-term-copy]').forEach((b) => { b.onclick = (e) => { e.stopPropagation(); const t = b.closest('.term-panel')?.querySelector('[data-copy]')?.dataset.copy || ''; copy(t, b); }; });
   document.querySelectorAll('[data-copy-path]').forEach((b) => { b.onclick = () => copy(b.dataset.copyPath, b); });
   $('[data-clear-filter]')?.addEventListener('click', () => goto(page, {}));
+  $('[data-focus-prompt]')?.addEventListener('click', () => { const i = $('#prompt-form input[name=title]'); i?.scrollIntoView({ behavior: 'smooth', block: 'center' }); i?.focus(); });
   $('#glass-toggle')?.addEventListener('click', () => { setGlass(document.documentElement.dataset.glass === 'off'); render(); });
   const escanear = async (b, full) => { b.disabled = true; const t = b.innerHTML; b.textContent = full ? 'Reindexando…' : 'Escaneando…'; try { const r = await api('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ full }) }); b.textContent = `${r.indexados} indexadas · ${r.erros} erros`; setTimeout(() => { b.disabled = false; b.innerHTML = t; render(); }, 1600); } catch (err) { b.disabled = false; b.innerHTML = t; alert(err.message); } };
   $('#scan')?.addEventListener('click', (e) => escanear(e.currentTarget, false));
