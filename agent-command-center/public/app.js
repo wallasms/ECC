@@ -75,7 +75,7 @@ const STATUS_LABEL = { working: 'Trabalhando', needs_input: 'Precisa de input', 
 /* ---------- Toasts + status-flip detection ---------- */
 function toast(msg, kind = 'info') {
   let host = $('#toasts');
-  if (!host) { host = document.createElement('div'); host.id = 'toasts'; host.className = 'toasts'; document.body.appendChild(host); }
+  if (!host) { host = document.createElement('div'); host.id = 'toasts'; host.className = 'toasts'; host.setAttribute('role', 'status'); host.setAttribute('aria-live', 'polite'); document.body.appendChild(host); }
   const el = document.createElement('div');
   el.className = 'toast glass t-' + kind; // t- prefixo evita colisão com classes de status (.failed/.needs_input)
   el.innerHTML = `<span class="tdot t-${esc(kind)}"></span><span class="tmsg">${esc(msg)}</span><button class="tx" aria-label="Fechar">✕</button>`;
@@ -219,7 +219,7 @@ function sessionRow(s) {
     </div>
     <div class="mono-badge" style="text-align:right">${fmt(s.updated_at)}</div></div>`;
 }
-function th(label, key) { const on = filters.sort === key || (!filters.sort && key === 'updated_at'); const arrow = on ? (filters.dir === 'asc' ? ' ↑' : ' ↓') : ''; return `<span class="sortable" data-sort="${key}"${key ? ' tabindex="0" role="button"' : ''}>${label}${arrow}</span>`; }
+function th(label, key) { const on = filters.sort === key || (!filters.sort && key === 'updated_at'); const arrow = on ? (filters.dir === 'asc' ? ' ↑' : ' ↓') : ''; const sort = on ? (filters.dir === 'asc' ? 'ascending' : 'descending') : 'none'; return `<span class="sortable" data-sort="${key}"${key ? ` tabindex="0" role="button" aria-sort="${sort}"` : ''}>${label}${arrow}</span>`; }
 function tableHead() { return `<div class="row head">${th('', '')}${th('Sessão', 'title')}<span>Status</span>${th('Agente', 'source')}<span>Modelo</span>${th('Projeto', 'project')}<span></span>${th('Atividade', 'updated_at')}</div>`; }
 function tabela(items, sortable) { return `<div class="surface">${sortable ? tableHead() : ''}${items.length ? items.map(sessionRow).join('') : emptyState('sessions', 'Nenhuma sessão', 'Ajuste os filtros ou reescaneie para indexar novas sessões.', scanCta)}</div>`; }
 // Tabela janelada: só as linhas visíveis + buffer são renderizadas; spacers de altura fixa
@@ -744,7 +744,7 @@ async function render(quiet) {
   LIVE.stop(); kbRow = -1;
   VT.cleanup?.(); VT.cleanup = null; VT.container = null; // remove scroll listener da render anterior
   const savedY = quiet && page === 'sessions' ? window.scrollY : null; // auto-refresh preserva posição
-  document.querySelectorAll('.nav').forEach((b) => b.classList.toggle('active', b.dataset.page === page));
+  document.querySelectorAll('.nav').forEach((b) => { const on = b.dataset.page === page; b.classList.toggle('active', on); if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
   if (!quiet) $('#app').innerHTML = skeletonFor(page);
   try {
     let html;
@@ -788,7 +788,7 @@ function bind() {
   $('[data-clear-filter]')?.addEventListener('click', () => goto(page, {}));
   $('[data-focus-prompt]')?.addEventListener('click', () => { const i = $('#prompt-form input[name=title]'); i?.scrollIntoView({ behavior: 'smooth', block: 'center' }); i?.focus(); });
   $('#glass-toggle')?.addEventListener('click', () => { setGlass(document.documentElement.dataset.glass === 'off'); render(); });
-  const escanear = async (b, full) => { b.disabled = true; const t = b.innerHTML; b.textContent = full ? 'Reindexando…' : 'Escaneando…'; try { const r = await api('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ full }) }); b.textContent = `${r.indexados} indexadas · ${r.erros} erros`; setTimeout(() => { b.disabled = false; b.innerHTML = t; render(); }, 1600); } catch (err) { b.disabled = false; b.innerHTML = t; alert(err.message); } };
+  const escanear = async (b, full) => { b.disabled = true; const t = b.innerHTML; b.textContent = full ? 'Reindexando…' : 'Escaneando…'; try { const r = await api('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ full }) }); b.textContent = `${r.indexados} indexadas · ${r.erros} erros`; setTimeout(() => { b.disabled = false; b.innerHTML = t; render(); }, 1600); } catch (err) { b.disabled = false; b.innerHTML = t; toast(err.message, 'failed'); } };
   $('#scan')?.addEventListener('click', (e) => escanear(e.currentTarget, false));
   $('#scan-full')?.addEventListener('click', (e) => escanear(e.currentTarget, true));
   document.querySelector('[data-scan-cta]')?.addEventListener('click', (e) => escanear(e.currentTarget, false));
@@ -798,7 +798,17 @@ function bind() {
   $('#queue')?.addEventListener('click', async (e) => {
     const card = e.target.closest('[data-id]'); const btn = e.target.closest('[data-act]'); if (!card || !btn) return;
     const id = card.dataset.id;
-    if (btn.dataset.act === 'del') { if (!confirm('Excluir este prompt?')) return; await api(`/api/prompts/${id}`, { method: 'DELETE' }); render(); }
+    if (btn.dataset.act === 'del') {
+      // Confirmação two-step no próprio botão (DESIGN.md): 1º clique arma por 3s, 2º executa.
+      // O estado armado NÃO sobrevive a re-render (auto-refresh) — desarme implícito, aceitável.
+      if (!btn.dataset.armed) {
+        btn.dataset.armed = '1'; btn.classList.add('danger-armed');
+        const rotulo = btn.textContent; btn.textContent = 'Confirmar exclusão?';
+        setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.classList.remove('danger-armed'); btn.textContent = rotulo; } }, 3000);
+        return;
+      }
+      await api(`/api/prompts/${id}`, { method: 'DELETE' }); render();
+    }
     else if (btn.dataset.act === 'adv') { await api(`/api/prompts/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: btn.dataset.next }) }); render(); }
     else if (btn.dataset.act === 'edit') { card.querySelector('.edit-form')?.toggleAttribute('hidden'); }
   });
@@ -842,12 +852,18 @@ async function detail(id) {
       ${s.source_path ? `<p class="path">${esc(s.source_path)}</p>` : ''}</div>
       <div class="detail-body"><div class="meta">${meta.map(([k, v]) => `<div><span>${k}</span><b>${esc(v)}</b></div>`).join('')}</div>
       ${(s.warnings || []).length ? `<div class="chips">${s.warnings.map((w) => `<span class="pill warning">${ic('alert')}${esc(w)}</span>`).join('')}</div>` : ''}
-      <div class="tabs">${TABS.map(([k, l, g]) => `<button data-tab="${k}" class="${k === 'timeline' ? 'on' : ''}">${ic(g)}${l}${counts[k] != null ? `<span class="tc">${counts[k]}</span>` : ''}</button>`).join('')}</div>
-      <div id="detail-tab"></div></div></div>`;
+      <div class="tabs" role="tablist" aria-label="Detalhe da sessão">${TABS.map(([k, l, g]) => `<button data-tab="${k}" role="tab" aria-selected="${k === 'timeline'}" class="${k === 'timeline' ? 'on' : ''}">${ic(g)}${l}${counts[k] != null ? `<span class="tc">${counts[k]}</span>` : ''}</button>`).join('')}</div>
+      <div id="detail-tab" role="tabpanel"></div></div></div>`;
     renderTab();
-    $('#detail-content').querySelectorAll('[data-tab]').forEach((btn) => { btn.onclick = () => { detailState.tab = btn.dataset.tab; $('#detail-content').querySelectorAll('[data-tab]').forEach((x) => x.classList.toggle('on', x === btn)); renderTab(); }; });
+    const abas = [...$('#detail-content').querySelectorAll('[data-tab]')];
+    const ativar = (btn) => { detailState.tab = btn.dataset.tab; abas.forEach((x) => { x.classList.toggle('on', x === btn); x.setAttribute('aria-selected', String(x === btn)); }); renderTab(); };
+    abas.forEach((btn, i) => {
+      btn.onclick = () => ativar(btn);
+      // Setas ←/→ movem a aba (padrão tablist); escopado ao foco no tab, sem colidir com j/k global.
+      btn.onkeydown = (e) => { if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return; e.preventDefault(); const alvo = abas[(i + (e.key === 'ArrowRight' ? 1 : -1) + abas.length) % abas.length]; alvo.focus(); ativar(alvo); };
+    });
     $('#detail').showModal();
-  } catch (e) { alert(e.message); }
+  } catch (e) { toast(e.message, 'failed'); }
 }
 function renderTab() {
   const { s, tab } = detailState; const host = $('#detail-tab'); if (!host) return;
@@ -895,7 +911,7 @@ function renderTab() {
 const runCommand = async () => { const r = await api('/api/command', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: $('#command-input').value }) }); const f = r.filters || {}; if (r.query) f.q = r.query; goto(r.page || 'sessions', f); };
 $('#command-input').onkeydown = (e) => { if (e.key === 'Enter') runCommand(); };
 const palette = $('#palette');
-const paletteScan = async () => { try { const r = await api('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); render(); alert(`${r.indexados} indexadas · ${r.erros} erros`); } catch (e) { alert(e.message); } };
+const paletteScan = async () => { try { const r = await api('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); render(); toast(`${r.indexados} indexadas · ${r.erros} erros`, 'info'); } catch (e) { toast(e.message, 'failed'); } };
 function paletteItems() {
   return [
     ...nav.map(([label, id, icon]) => ({ label, icon, hint: 'ir para', run: () => goto(id) })),
@@ -940,6 +956,7 @@ addEventListener('keydown', (e) => {
   const busy = $('#detail').open || palette.open;
   if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) { e.preventDefault(); openPalette(); return; }
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === 'Escape') { document.querySelectorAll('.danger-armed').forEach((b) => { delete b.dataset.armed; b.classList.remove('danger-armed'); b.textContent = 'Excluir'; }); return; }
   if (e.key === '/') { e.preventDefault(); $('#command-input').focus(); return; }
   if (gPending) { gPending = false; if (GCHORD[e.key]) { e.preventDefault(); goto(GCHORD[e.key]); } return; }
   if (e.key === 'g' && !busy) { gPending = true; setTimeout(() => { gPending = false; }, 700); return; }

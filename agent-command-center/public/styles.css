@@ -173,6 +173,7 @@ kbd{font:11px ui-monospace,monospace;border:1px solid var(--border);border-botto
 .link-btn:hover{text-decoration:underline}
 .filter-chip{display:flex;align-items:center;gap:10px;margin:0 0 var(--s4)}
 .link-btn.danger{color:var(--st-failed)}
+.link-btn.danger-armed{color:#fff;background:var(--st-failed);border-radius:7px;padding:2px 8px;text-decoration:none}
 .card.done{opacity:.62}
 .edit-form{margin-top:var(--s3)}
 
@@ -194,7 +195,7 @@ h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;
 .hero .live-dot{width:7px;height:7px;border-radius:50%;background:var(--st-working);animation:pulse 2.4s ease-in-out infinite}
 
 /* ---------- Metric cards ---------- */
-.stats{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-top:var(--s3)}
+.stats{display:grid;grid-template-columns:repeat(6,1fr);gap:var(--s3);margin-top:var(--s3)}
 .stat{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:15px 18px;
   box-shadow:var(--shadow),var(--surface-hi);position:relative;overflow:hidden;transition:transform .14s ease,box-shadow .14s}
 .stat::before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:var(--stat-accent,var(--border))}
@@ -277,11 +278,11 @@ h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;
 .card-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--border-soft)}
 
 /* ---------- Agent Canvas / Studio ---------- */
-.canvas{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}
+.canvas{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:var(--s4)}
 .cluster{border:1px solid var(--border-soft);border-radius:18px;padding:14px;background:color-mix(in srgb,var(--surface) 40%,transparent)}
 .cluster-head{display:flex;align-items:center;gap:8px;margin:2px 4px 12px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
 .cluster-head .count{margin-left:auto;background:var(--pill-bg);color:var(--pill-fg);border-radius:99px;padding:1px 8px;font-size:11px}
-.cluster-body{display:grid;gap:12px}
+.cluster-body{display:grid;gap:var(--s3)}
 .agent-card{position:relative;border-radius:16px;padding:15px 16px 14px;cursor:pointer;
   transition:transform .16s ease,box-shadow .16s;overflow:hidden}
 .agent-card:hover{transform:translateY(-3px);box-shadow:var(--shadow-lg),var(--glass-hi)}
