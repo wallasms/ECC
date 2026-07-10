@@ -5,7 +5,8 @@
       "name": "agent-command-center",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "agent-command-center", "start"],
-      "port": 4310
+      "port": 4310,
+      "autoPort": true
     }
   ]
 }

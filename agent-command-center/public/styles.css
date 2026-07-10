@@ -171,6 +171,10 @@ kbd{font:11px ui-monospace,monospace;border:1px solid var(--border);border-botto
 .ghost:disabled,.primary:disabled{opacity:.6;cursor:default;filter:none}
 .link-btn{border:0;background:transparent;color:var(--accent);font:inherit;font-size:12px;font-weight:600;cursor:pointer;padding:0}
 .link-btn:hover{text-decoration:underline}
+.filter-chip{display:flex;align-items:center;gap:10px;margin:0 0 var(--s4)}
+.link-btn.danger{color:var(--st-failed)}
+.card.done{opacity:.62}
+.edit-form{margin-top:var(--s3)}
 
 /* ---------- Headings ---------- */
 h1{font-size:28px;font-weight:650;letter-spacing:-.03em;margin:0 0 6px}

@@ -1,10 +1,25 @@
 import { basename, dirname } from 'node:path';
 
-const SEGREDO = /((?:api[_-]?key|token|secret|password|authorization)["'\s:=]+)([^\s,"'}]+)/gi;
-const CHAVE = /\b(?:sk|ghp|github_pat|xox[baprs])[-_A-Za-z0-9]{12,}\b/g;
+const SEGREDO = /((?:api[_-]?key|token|secret|password|authorization|bearer|client[_-]?secret|aws_secret_access_key|private[_-]?key)["'\s:=]+)([^\s,"'}]+)/gi;
+// Cada alternativa é auto-contida (âncoras próprias) para não vazar o sufixo de
+// comprimento entre elas — evita afrouxar a regra original sk/ghp e falso-positivar.
+const CHAVE = new RegExp([
+  /\b(?:sk|ghp|github_pat|xox[baprs])[-_A-Za-z0-9]{12,}\b/,          // OpenAI/GitHub/Slack (original)
+  /\bxapp-\d-[A-Za-z0-9-]{10,}\b/,                                    // Slack app token
+  /\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b/,                 // Stripe
+  /\b(?:AKIA|ASIA|AGPA|AIDA|AROA)[A-Z0-9]{16}\b/,                    // AWS access key id
+  /\bAIza[0-9A-Za-z_-]{35}\b/,                                        // Google API key
+  /\bGOCSPX-[A-Za-z0-9_-]{20,}\b/,                                    // Google OAuth secret
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/ // JWT
+].map((r) => r.source).join('|'), 'g');
+// Bloco de chave privada PEM (multi-linha) — colapsa inteiro.
+const PEM = /-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z ]+ )?PRIVATE KEY-----/g;
 
 export function redigir(valor = '') {
-  return String(valor).replace(SEGREDO, '$1[REDACTED]').replace(CHAVE, '[REDACTED]');
+  return String(valor)
+    .replace(PEM, '[REDACTED PRIVATE KEY]')
+    .replace(SEGREDO, '$1[REDACTED]')
+    .replace(CHAVE, '[REDACTED]');
 }
 
 function texto(conteudo) {
@@ -119,8 +134,7 @@ export function normalizar_evento(registro, posicao) {
   return {
     position: posicao,
     timestamp: registro?.timestamp || payload?.timestamp || null,
-    kind: String(kind), role, summary,
-    raw: redigir(JSON.stringify(registro)).slice(0, 10_000)
+    kind: String(kind), role, summary
   };
 }
 
@@ -201,10 +215,11 @@ export function serie_de_usage(registros) {
 export function analisar_jsonl(conteudo, arquivo, stats, origem_forcada) {
   const avisos = [];
   const registros = [];
-  for (const [indice, linha] of conteudo.split(/\r?\n/).entries()) {
+  const linhas = conteudo.split(/\r?\n/);
+  for (const [indice, linha] of linhas.entries()) {
     if (!linha.trim()) continue;
     try { registros.push(JSON.parse(linha)); }
-    catch { if (indice < conteudo.split(/\r?\n/).length - 2) avisos.push(`Linha ${indice + 1} inválida`); }
+    catch { if (indice < linhas.length - 2) avisos.push(`Linha ${indice + 1} inválida`); }
   }
   const meta_registro = registros.find((r) => r?.type === 'session_meta');
   const meta = meta_registro?.payload || {};

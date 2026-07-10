@@ -147,6 +147,19 @@ test('contratos /api/* (sort, busca em eventos, custo, scan full)', async (t) =>
   // scan de paths vazios não apaga as sessões semeadas
   assert.equal((await get('')).length, 3);
 
+  // Prompt Queue CRUD
+  const pj = (m, u, b) => fetch(`${BASE}${u}`, { method: m, headers: { 'Content-Type': 'application/json' }, body: b && JSON.stringify(b) });
+  const pid = (await (await pj('POST', '/api/prompts', { title: 'P1', priority: 'high' })).json()).id;
+  assert.ok(Number.isInteger(pid));
+  const upd = await pj('PUT', `/api/prompts/${pid}`, { status: 'queued' });
+  assert.equal(upd.status, 200);
+  assert.equal((await upd.json()).status, 'queued');
+  assert.equal((await pj('PUT', `/api/prompts/${pid}`, { status: 'bogus' })).status, 400);       // enum inválido
+  assert.equal((await pj('PUT', `/api/prompts/${pid}`, { priority: 'urgente' })).status, 400);    // prioridade inválida
+  assert.equal((await pj('PUT', '/api/prompts/999999', { title: 'x' })).status, 404);             // id inexistente
+  assert.equal((await pj('DELETE', `/api/prompts/${pid}`)).status, 200);
+  assert.equal((await pj('DELETE', `/api/prompts/${pid}`)).status, 404);                          // já removido
+
   // SSE: id inexistente → 404
   const semStream = await fetch(`${BASE}/api/sessions/nao-existe/stream`);
   assert.equal(semStream.status, 404);

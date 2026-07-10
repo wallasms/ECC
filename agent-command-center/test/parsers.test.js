@@ -11,9 +11,32 @@ test('parser Codex extrai metadados e redige segredo', () => {
   ].map(JSON.stringify).join('\n');
   const result = analisar_jsonl(input, 'C:\\Users\\me\\.codex\\sessions\\x.jsonl', stats);
   assert.equal(result.source, 'codex'); assert.equal(result.id, 'abc'); assert.match(result.title, /REDACTED/); assert.doesNotMatch(JSON.stringify(result), /secreto123/);
+  assert.ok(result.events.every((evento) => !('raw' in evento)), 'evento não persiste payload bruto');
 });
 
 test('redactor cobre chaves conhecidas', () => assert.equal(redigir('key sk-abcdefghijklmnop'), 'key [REDACTED]'));
+
+test('redação: corpus de segredos é redigido, prosa benigna sobrevive', () => {
+  const LEAKS = [
+    'AKIAIOSFODNN7EXAMPLE',
+    'AIzaSyD1234567890abcdefghijklmnopqrstuv',            // AIza + 35
+    'xapp-1-A012-345678901234-abcdef',
+    'sk_live_51H1234567890abcdefghij',
+    'GOCSPX-abcdefghijklmnopqrstuvwx',
+    'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.dozjgNryP4J3jVmNHl0w5N',
+    'aws_secret_access_key = wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY',
+    'Authorization: Bearer abcdef1234567890abcdef',
+    '-----BEGIN RSA PRIVATE KEY-----\nMIIBabcdef\n-----END RSA PRIVATE KEY-----'
+  ];
+  for (const s of LEAKS) assert.doesNotMatch(redigir(s), /AKIA|AIzaSy|xapp-1|sk_live|GOCSPX|eyJhbGci|wJalrXU|Bearer abcdef|BEGIN RSA/, `vazou: ${s}`);
+  // Benigno deve sobreviver intacto (guardas de comprimento + word-boundary):
+  for (const s of ['skateboard', 'tokenizer.js', 'src/secret-santa.ts', 'react.production.min.js']) assert.equal(redigir(s), s, `mutilou benigno: ${s}`);
+  // Idempotência: redigir 2× = redigir 1×.
+  const misto = 'usa AKIAIOSFODNN7EXAMPLE e sk_live_51H1234567890abcdefghij aqui';
+  assert.equal(redigir(redigir(misto)), redigir(misto));
+  // Label preservado (não colapsa o rótulo):
+  assert.match(redigir('token: abcdef1234567890'), /^token:\s*\[REDACTED\]$/);
+});
 
 test('tokens Claude: soma usage por mensagem (campos disjuntos)', () => {
   const msg = (i) => ({ type:'assistant', timestamp:`2026-01-01T00:0${i}:00Z`,

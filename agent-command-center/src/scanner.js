@@ -1,7 +1,20 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { basename, dirname, extname, join, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { analisar_jsonl, analisar_texto } from './parsers.js';
+
+// Escopo de uma skill: 'user' se vive num dot-dir global sob o HOME do usuário
+// (~/.claude, ~/.codex, ~/.agents), senão 'project'. Independe do cwd do servidor.
+// Um checkout de projeto sob o HOME (ex.: ~/Projetos/foo/.claude/skills) NÃO casa,
+// pois exigimos o dot-dir imediatamente após o HOME.
+export function escopo_skill(arquivo, home) {
+  const a = resolve(arquivo); const h = resolve(home);
+  if (!a.startsWith(h + sep)) return 'project';
+  const resto = a.slice(h.length + sep.length);
+  const primeiro = resto.split(sep)[0];
+  return ['.claude', '.codex', '.agents'].includes(primeiro) ? 'user' : 'project';
+}
 
 const MAX_ARQUIVO = 25 * 1024 * 1024;
 
@@ -61,8 +74,8 @@ function salvar_sessao(db, sessao, stats) {
       sessao.created_at, sessao.updated_at, sessao.tokens, sessao.cost, sessao.snippet, JSON.stringify(sessao.tools), JSON.stringify(sessao.files),
       JSON.stringify(sessao.warnings), stats.mtimeMs, stats.size);
   db.prepare('DELETE FROM session_events WHERE session_id=?').run(sessao.id);
-  const inserir = db.prepare('INSERT OR REPLACE INTO session_events(session_id,position,timestamp,kind,role,summary,raw_json) VALUES(?,?,?,?,?,?,?)');
-  for (const evento of sessao.events) inserir.run(sessao.id, evento.position, evento.timestamp, evento.kind, evento.role, evento.summary, evento.raw);
+  const inserir = db.prepare('INSERT OR REPLACE INTO session_events(session_id,position,timestamp,kind,role,summary) VALUES(?,?,?,?,?,?)');
+  for (const evento of sessao.events) inserir.run(sessao.id, evento.position, evento.timestamp, evento.kind, evento.role, evento.summary);
 }
 
 function escanear_sessoes(db, settings, run_id, full) {
@@ -104,7 +117,7 @@ function escanear_skills(db, settings) {
       if (basename(arquivo).toLowerCase() !== 'skill.md') continue;
       try {
         const conteudo = readFileSync(arquivo, 'utf8'); const fm = ler_frontmatter(conteudo); const pasta = dirname(arquivo);
-        const escopo = arquivo.includes('.codex') || arquivo.includes('.claude') && !arquivo.includes(process.cwd()) ? 'user' : 'project';
+        const escopo = escopo_skill(arquivo, homedir());
         const avisos = [];
         if (!fm.description) avisos.push('Descrição ausente');
         if (conteudo.length > 20_000) avisos.push('Skill possivelmente ampla demais');
@@ -143,14 +156,36 @@ function escanear_subagents(db, settings) {
   }
 }
 
+// Cria/atualiza projects a partir de settings.project_roots, varrendo só os filhos
+// imediatos de cada raiz (um nível = repos). Faz projetos sem sessão aparecerem.
+function escanear_project_roots(db, settings) {
+  for (const raiz of settings.project_roots || []) {
+    if (!existsSync(raiz)) continue;
+    let entradas = [];
+    try { entradas = readdirSync(raiz, { withFileTypes: true }); } catch { continue; }
+    for (const entrada of entradas) {
+      if (!entrada.isDirectory()) continue;
+      if (['node_modules', '.git', 'cache', 'tmp'].includes(entrada.name)) continue;
+      projeto(db, join(raiz, entrada.name)); // upsert por path; reusa detecção AGENTS/CLAUDE.md
+    }
+  }
+}
+
 export function executar_scan(db, settings, full = false) {
   const inicio = new Date().toISOString();
-  const run = db.prepare('INSERT INTO scan_runs(started_at) VALUES(?)').run(inicio);
-  const resultado = escanear_sessoes(db, settings, run.lastInsertRowid, full);
-  escanear_skills(db, settings); escanear_hooks(db, settings); escanear_subagents(db, settings);
-  db.prepare('UPDATE scan_runs SET finished_at=?,files_seen=?,indexed=?,errors=? WHERE id=?')
-    .run(new Date().toISOString(), resultado.vistos, resultado.indexados, resultado.erros, run.lastInsertRowid);
-  return { run_id: Number(run.lastInsertRowid), ...resultado };
+  db.exec('BEGIN');
+  try {
+    const run = db.prepare('INSERT INTO scan_runs(started_at) VALUES(?)').run(inicio);
+    const resultado = escanear_sessoes(db, settings, run.lastInsertRowid, full);
+    escanear_skills(db, settings); escanear_hooks(db, settings); escanear_subagents(db, settings); escanear_project_roots(db, settings);
+    db.prepare('UPDATE scan_runs SET finished_at=?,files_seen=?,indexed=?,errors=? WHERE id=?')
+      .run(new Date().toISOString(), resultado.vistos, resultado.indexados, resultado.erros, run.lastInsertRowid);
+    db.exec('COMMIT');
+    return { run_id: Number(run.lastInsertRowid), ...resultado };
+  } catch (erro) {
+    db.exec('ROLLBACK');
+    throw erro;
+  }
 }
 
 export { arquivos_em };

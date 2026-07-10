@@ -71,7 +71,7 @@ function sessao_publica(row) {
   };
 }
 
-function listar_sessoes(url) {
+function listar_sessoes(url, limite = 500) {
   const filtros = []; const valores = [];
   for (const [param, coluna] of [['source', 's.source'], ['status', 's.status'], ['model', 's.model']]) {
     if (url.searchParams.get(param)) { filtros.push(`${coluna}=?`); valores.push(url.searchParams.get(param)); }
@@ -88,7 +88,7 @@ function listar_sessoes(url) {
   const colunas = { updated_at: 's.updated_at', status: 's.status', project: 'p.name', title: 's.title', source: 's.source' };
   const ordem = colunas[url.searchParams.get('sort')] || 's.updated_at';
   const dir = url.searchParams.get('dir') === 'asc' ? 'ASC' : 'DESC';
-  return db.prepare(`SELECT s.*,p.name project,p.path project_path FROM sessions s LEFT JOIN projects p ON p.id=s.project_id ${where} ORDER BY ${ordem} ${dir} LIMIT 500`).all(...valores).map(sessao_publica);
+  return db.prepare(`SELECT s.*,p.name project,p.path project_path FROM sessions s LEFT JOIN projects p ON p.id=s.project_id ${where} ORDER BY ${ordem} ${dir} LIMIT ?`).all(...valores, limite).map(sessao_publica);
 }
 
 // Lê apenas os bytes novos do arquivo de sessão ao vivo (delta desde `from`).
@@ -245,7 +245,7 @@ function dashboard() {
     stats: { active: stats.working || 0, needs_input: stats.needs_input || 0, completed: stats.completed || 0, failed: stats.failed || 0,
       sessions: Object.values(stats).reduce((a, b) => a + b, 0),
       ...db.prepare('SELECT COALESCE(SUM(tokens),0) tokens,COALESCE(SUM(cost),0) cost FROM sessions').get() },
-    recent: listar_sessoes(new URL('http://local')).slice(0, 12),
+    recent: listar_sessoes(new URL('http://local'), 12),
     attention: db.prepare(`SELECT id,source,title,status,updated_at FROM sessions WHERE status IN ('needs_input','failed') ORDER BY updated_at DESC LIMIT 10`).all(),
     projects: db.prepare(`SELECT p.name,COUNT(s.id) sessions,COALESCE(SUM(s.tokens),0) tokens,COALESCE(SUM(s.cost),0) cost
       FROM projects p JOIN sessions s ON s.project_id=p.id GROUP BY p.id HAVING tokens>0 OR cost>0 ORDER BY tokens DESC LIMIT 6`).all()
@@ -268,9 +268,9 @@ function comando_ui(texto) {
   const t = String(texto || '').toLowerCase();
   if (/falh|failed/.test(t)) return { action: 'navigate', page: 'sessions', filters: { status: 'failed', source: /codex/.test(t) ? 'codex' : undefined } };
   if (/aguard|input|atenção/.test(t)) return { action: 'navigate', page: 'sessions', filters: { status: 'needs_input' } };
-  if (/skill/.test(t)) return { action: 'navigate', page: 'skills', query: t.replace(/.*(?:skill|related to|sobre)\s*/, '') };
+  if (/skill/.test(t)) return { action: 'navigate', page: 'skills', filters: { q: t.replace(/.*(?:skill|related to|sobre)\s*/, '').trim() || undefined } };
   if (/projet.*agents\.md|missing agents/.test(t)) return { action: 'navigate', page: 'projects', filters: { missing_agents: true } };
-  if (/hook/.test(t)) return { action: 'navigate', page: 'hooks', template: /danger|perigos/.test(t) ? 'block-dangerous-bash' : undefined };
+  if (/hook/.test(t)) return { action: 'navigate', page: 'hooks', filters: { template: /danger|perigos/.test(t) ? 'bash' : undefined } };
   if (/sess/.test(t)) return { action: 'navigate', page: 'sessions', filters: { source: /claude/.test(t) ? 'claude' : /codex/.test(t) ? 'codex' : undefined } };
   return { action: 'search', page: 'sessions', query: texto, message: 'Busca aplicada às sessões locais.' };
 }
@@ -331,6 +331,24 @@ async function api(req, res, url) {
       .run(b.title, b.body || '', b.target || 'either', b.project || null, b.priority || 'medium', b.status || 'draft', agora, agora);
     return json(res, 201, { id: Number(result.lastInsertRowid) });
   }
+  if (req.method === 'PUT' && /^\/api\/prompts\/\d+$/.test(url.pathname)) {
+    const id = Number(url.pathname.split('/').at(-1));
+    const b = await corpo(req);
+    if ('status' in b && !['draft', 'queued', 'done'].includes(b.status)) return json(res, 400, { error: 'Status inválido' });
+    if ('priority' in b && !['low', 'medium', 'high'].includes(b.priority)) return json(res, 400, { error: 'Prioridade inválida' });
+    const cols = ['title', 'body', 'target', 'priority', 'status', 'project'].filter((c) => c in b);
+    if (!cols.length) return json(res, 400, { error: 'Nada para atualizar' });
+    const r = db.prepare(`UPDATE prompts SET ${cols.map((c) => `${c}=?`).join(',')},updated_at=? WHERE id=?`)
+      .run(...cols.map((c) => b[c]), new Date().toISOString(), id);
+    if (!r.changes) return json(res, 404, { error: 'Prompt não encontrado' });
+    return json(res, 200, db.prepare('SELECT * FROM prompts WHERE id=?').get(id));
+  }
+  if (req.method === 'DELETE' && /^\/api\/prompts\/\d+$/.test(url.pathname)) {
+    const id = Number(url.pathname.split('/').at(-1));
+    const r = db.prepare('DELETE FROM prompts WHERE id=?').run(id);
+    if (!r.changes) return json(res, 404, { error: 'Prompt não encontrado' });
+    return json(res, 200, { deleted: id });
+  }
   if (req.method === 'GET' && url.pathname === '/api/settings') return json(res, 200, settings);
   if (req.method === 'PUT' && url.pathname === '/api/settings') {
     const b = await corpo(req); settings = { ...settings, ...b }; writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2)); return json(res, 200, settings);
@@ -351,9 +369,12 @@ const server = createServer(async (req, res) => {
   } catch (erro) { if (!res.headersSent) json(res, 500, { error: String(erro.message || erro) }); else res.end(); }
 });
 
-server.listen(PORT, HOST, () => {
+// Só escuta quando executado como entrypoint (node src/server.js). Importado por
+// um teste, o módulo não deve bindar porta nem escanear — apenas expor as funções.
+const is_main = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+if (is_main) server.listen(PORT, HOST, () => {
   console.log(`Agent Command Center: http://${HOST}:${PORT}`);
   if (settings.scan_on_start) setTimeout(() => { try { console.log('Scan:', executar_scan(db, settings)); } catch (e) { console.error('Scan falhou:', e.message); } }, 50);
 });
 
-export { comando_ui, carregar_settings };
+export { comando_ui, carregar_settings, blocos_5h };

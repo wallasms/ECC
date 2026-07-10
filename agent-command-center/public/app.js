@@ -552,13 +552,17 @@ function appendLiveLines(body, lines) {
 }
 
 /* ---------- generic card page ---------- */
-async function cardPage(endpoint, title, subtitle, renderCard, action = '') {
+async function cardPage(endpoint, title, subtitle, renderCard, action = '', filterFn = null, filterLabel = '') {
   const data = await api(endpoint);
-  const items = Array.isArray(data) ? data : data.installed;
-  const recs = data.recommendations
+  let items = Array.isArray(data) ? data : data.installed;
+  const filtrando = filterFn && filterLabel;
+  if (filtrando) items = items.filter((it) => filterFn(it, filters));
+  const chip = filtrando ? `<div class="filter-chip"><span class="pill accent">${ic('search')}${esc(filterLabel)}</span><button class="link-btn" data-clear-filter>limpar</button></div>` : '';
+  const recs = data.recommendations && !filtrando
     ? `<h2>Recomendações rule-based</h2><div class="cards">${data.recommendations.map((x) => `<div class="card rise"><div class="card-head"><h3><span class="card-icon">${ic('spark')}</span>${esc(x.name)}</h3><span class="score"><span class="bar"><i style="width:${Math.round((x.score || 0) * 100)}%"></i></span>${Math.round((x.score || 0) * 100)}</span></div><p>${esc(x.reason)}</p></div>`).join('')}</div>`
     : '';
-  return shell(title, subtitle, `<div class="${items.length ? 'cards' : 'surface'}">${items.length ? items.map(renderCard).join('') : emptyState('search', 'Nada detectado', `Nenhum item de ${title.toLowerCase()} foi encontrado nos caminhos configurados.`, scanCta)}</div>${recs}`, action);
+  const vazio = filtrando ? emptyState('search', 'Nenhum resultado para o filtro', 'Nenhum item corresponde ao filtro ativo. Limpe o filtro para ver todos.') : emptyState('search', 'Nada detectado', `Nenhum item de ${title.toLowerCase()} foi encontrado nos caminhos configurados.`, scanCta);
+  return shell(title, subtitle, `${chip}<div class="${items.length ? 'cards' : 'surface'}">${items.length ? items.map(renderCard).join('') : vazio}</div>${recs}`, action);
 }
 const SKILL_CAT = [[/ui|design|polish/i, 'UI / Design', 'design'], [/alm|finance|report|dashboard|dv01/i, 'ALM / Finance', 'chart'], [/review|pr|commit/i, 'Code Review', 'shield'], [/test|verify/i, 'Testing', 'check'], [/hook/i, 'Hooks', 'hooks'], [/prompt|context/i, 'Prompting', 'chat'], [/cost|token|optim/i, 'Cost', 'droplet'], [/session|parser|scan/i, 'Session Parsing', 'sessions']];
 function skillCat(s) { const hay = `${s.name} ${s.description || ''}`; return SKILL_CAT.find(([re]) => re.test(hay)) || [, 'Skill', 'book']; }
@@ -593,12 +597,24 @@ function subagentCard(x) {
 }
 
 /* ---------- Prompt queue ---------- */
-function promptCard(x) { return `<div class="card rise"><div class="card-head"><h3><span class="card-icon">${ic('prompts')}</span>${esc(x.title)}</h3><span class="pill ${x.priority === 'high' ? 'warning' : 'accent'}">${esc(x.priority)}</span></div><p>${esc(x.body || 'Sem corpo')}</p><div><span class="pill">${esc(x.target)}</span><span class="pill">${esc(x.status)}</span>${x.project ? `<span class="pill">${esc(x.project)}</span>` : ''}</div></div>`; }
+const PROMPT_NEXT = { draft: 'queued', queued: 'done', done: 'queued' };
+function promptCard(x) {
+  const done = x.status === 'done';
+  const nextLabel = done ? 'Reabrir' : x.status === 'queued' ? 'Concluir' : 'Enfileirar';
+  const opt = (v, cur) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${v}</option>`;
+  return `<div class="card rise${done ? ' done' : ''}" data-id="${x.id}">
+    <div class="card-head"><h3><span class="card-icon">${ic('prompts')}</span>${esc(x.title)}</h3><span class="pill ${x.priority === 'high' ? 'warning' : 'accent'}">${esc(x.priority)}</span></div>
+    <p>${esc(x.body || 'Sem corpo')}</p>
+    <div><span class="pill">${esc(x.target)}</span><span class="pill ${done ? '' : 'accent'}">${esc(x.status)}</span>${x.project ? `<span class="pill">${esc(x.project)}</span>` : ''}</div>
+    <div class="card-actions"><button class="link-btn" data-act="adv" data-next="${PROMPT_NEXT[x.status] || 'queued'}">${nextLabel}</button><button class="link-btn" data-act="edit">Editar</button><button class="link-btn danger" data-act="del">Excluir</button></div>
+    <form class="form edit-form" hidden data-editid="${x.id}"><input name="title" value="${esc(x.title)}" required><textarea name="body">${esc(x.body || '')}</textarea><div class="ds-row"><select name="target">${['either', 'codex', 'claude'].map((t) => opt(t, x.target)).join('')}</select><select name="priority">${['low', 'medium', 'high'].map((p) => opt(p, x.priority)).join('')}</select><button class="primary">Salvar</button></div></form>
+  </div>`;
+}
 async function prompts() {
   const data = await api('/api/prompts');
   const form = `<form class="form" id="prompt-form"><label>Novo prompt</label><input name="title" placeholder="Título" required><textarea name="body" placeholder="Prompt"></textarea><div class="ds-row"><select name="target"><option value="either">Claude ou Codex</option><option value="codex">Codex</option><option value="claude">Claude Code</option></select><select name="priority"><option value="medium">Prioridade média</option><option value="high">Alta</option><option value="low">Baixa</option></select><button class="primary">Adicionar à fila</button></div></form>`;
   const queue = data.length ? `<div class="cards">${data.map(promptCard).join('')}</div>` : `<div class="surface">${emptyState('prompts', 'Fila vazia', 'Prompts adicionados aparecem aqui, prontos para enviar ao Codex ou Claude Code.')}</div>`;
-  return shell('Prompt Queue', 'Prepare trabalho antes de enviar aos agentes.', `${form}<h2>Fila (${data.length})</h2>${queue}`);
+  return shell('Prompt Queue', 'Prepare trabalho antes de enviar aos agentes.', `${form}<h2>Fila (${data.length})</h2><div id="queue">${queue}</div>`);
 }
 
 /* ---------- Settings ---------- */
@@ -736,9 +752,9 @@ async function render(quiet) {
     else if (page === 'live') html = await livePage();
     else if (page === 'studio') html = await studio();
     else if (page === 'sessions') html = await sessions();
-    else if (page === 'projects') html = await cardPage('/api/projects', 'Projetos', 'Sessões agrupadas por repositório.', projectCard);
-    else if (page === 'skills') html = await cardPage('/api/skills', 'Skills Finder', 'Skills instaladas e lacunas detectadas — como um App Store de skills.', skillCard);
-    else if (page === 'hooks') html = await cardPage('/api/hooks', 'Hooks', 'Somente inspeção. Templates não são ativados automaticamente.', hookCard);
+    else if (page === 'projects') html = await cardPage('/api/projects', 'Projetos', 'Sessões agrupadas por repositório.', projectCard, '', filters.missing_agents ? (p) => !p.agents_md : null, filters.missing_agents ? 'sem AGENTS.md' : '');
+    else if (page === 'skills') html = await cardPage('/api/skills', 'Skills Finder', 'Skills instaladas e lacunas detectadas — como um App Store de skills.', skillCard, '', filters.q ? (s, f) => `${s.name} ${s.description || ''}`.toLowerCase().includes(f.q.toLowerCase()) : null, filters.q ? `“${filters.q}”` : '');
+    else if (page === 'hooks') html = await cardPage('/api/hooks', 'Hooks', 'Somente inspeção. Templates não são ativados automaticamente.', hookCard, '', (filters.q || filters.template) ? (h, f) => (!f.q || `${h.event} ${h.matcher || ''} ${h.description || ''}`.toLowerCase().includes(f.q.toLowerCase())) && (!f.template || `${h.event} ${h.matcher || ''} ${h.description || ''} ${h.source_path || ''}`.toLowerCase().includes(f.template.toLowerCase())) : null, filters.template ? `template ${filters.template}` : filters.q ? `“${filters.q}”` : '');
     else if (page === 'agents') html = await cardPage('/api/subagents', 'Multiagents', 'Definições locais de subagentes.', subagentCard);
     else if (page === 'prompts') html = await prompts();
     else if (page === 'design') html = designSystem();
@@ -767,6 +783,7 @@ function bind() {
   document.querySelectorAll('[data-session-open]').forEach((b) => { b.onclick = (e) => { e.stopPropagation(); detail(b.dataset.sessionOpen); }; });
   document.querySelectorAll('[data-term-copy]').forEach((b) => { b.onclick = (e) => { e.stopPropagation(); const t = b.closest('.term-panel')?.querySelector('[data-copy]')?.dataset.copy || ''; copy(t, b); }; });
   document.querySelectorAll('[data-copy-path]').forEach((b) => { b.onclick = () => copy(b.dataset.copyPath, b); });
+  $('[data-clear-filter]')?.addEventListener('click', () => goto(page, {}));
   $('#glass-toggle')?.addEventListener('click', () => { setGlass(document.documentElement.dataset.glass === 'off'); render(); });
   const escanear = async (b, full) => { b.disabled = true; const t = b.innerHTML; b.textContent = full ? 'Reindexando…' : 'Escaneando…'; try { const r = await api('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ full }) }); b.textContent = `${r.indexados} indexadas · ${r.erros} erros`; setTimeout(() => { b.disabled = false; b.innerHTML = t; render(); }, 1600); } catch (err) { b.disabled = false; b.innerHTML = t; alert(err.message); } };
   $('#scan')?.addEventListener('click', (e) => escanear(e.currentTarget, false));
@@ -775,6 +792,19 @@ function bind() {
   let deb; $('#search')?.addEventListener('input', (e) => { clearTimeout(deb); const v = e.target.value; deb = setTimeout(() => { filters.q = v; goto(page, filters); }, 320); });
   $('#status')?.addEventListener('change', (e) => { filters.status = e.target.value; goto(page, filters); });
   $('#prompt-form')?.addEventListener('submit', async (e) => { e.preventDefault(); await api('/api/prompts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.fromEntries(new FormData(e.target))) }); render(); });
+  $('#queue')?.addEventListener('click', async (e) => {
+    const card = e.target.closest('[data-id]'); const btn = e.target.closest('[data-act]'); if (!card || !btn) return;
+    const id = card.dataset.id;
+    if (btn.dataset.act === 'del') { if (!confirm('Excluir este prompt?')) return; await api(`/api/prompts/${id}`, { method: 'DELETE' }); render(); }
+    else if (btn.dataset.act === 'adv') { await api(`/api/prompts/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: btn.dataset.next }) }); render(); }
+    else if (btn.dataset.act === 'edit') { card.querySelector('.edit-form')?.toggleAttribute('hidden'); }
+  });
+  $('#queue')?.addEventListener('submit', async (e) => {
+    if (!e.target.classList.contains('edit-form')) return;
+    e.preventDefault();
+    await api(`/api/prompts/${e.target.dataset.editid}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.fromEntries(new FormData(e.target))) });
+    render();
+  });
   $('#settings-form')?.addEventListener('submit', async (e) => { e.preventDefault(); const d = Object.fromEntries(new FormData(e.target)); const current = await api('/api/settings'); current.session_paths = { codex: d.codex.split('\n').filter(Boolean), claude: d.claude.split('\n').filter(Boolean) }; await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(current) }); render(); });
   if (page === 'studio') loadStudioQueue();
   if (page === 'live') startLive();
