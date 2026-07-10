@@ -273,7 +273,17 @@ async function dashboard() {
    entre polls (block.cost + burn_rate_hr × Δt), snapando no valor real a cada poll. */
 const BLOCO_S = 5 * 3600; // bloco de 5h em segundos
 const ISL_R = 52, ISL_C = 2 * Math.PI * ISL_R; // raio/circunferência do anel SVG
-const MODEL_COLORS = ['--accent', '--st-working', '--st-needs', '--st-completed', '--st-failed', '--st-stale'];
+// Paleta categórica sóbria (10 hues distintas, legíveis em light E dark). Cores
+// de status (verde/vermelho) foram removidas: pintar um modelo de "failed" mente.
+const MODEL_PALETTE = ['#4e79a7', '#59a14f', '#e1934a', '#c65f5f', '#9c7bb8', '#56a6a0', '#d18aad', '#a6a049', '#a1745e', '#8a8a8a'];
+// Ordena modelos por total desc; >10 → excedente vira 'outros' (cinza). Cor estável por rank.
+function modelOrder(rows) {
+  const tot = {}; for (const r of rows) tot[r.model] = (tot[r.model] || 0) + (r.tokens || 0);
+  const ord = Object.keys(tot).sort((a, b) => tot[b] - tot[a]);
+  return ord.length > 10 ? [...ord.slice(0, 9), 'outros'] : ord;
+}
+const labelOf = (m, order) => (order.includes(m) ? m : 'outros');
+const colorFor = (m, order) => MODEL_PALETTE[Math.max(0, order.indexOf(labelOf(m, order))) % MODEL_PALETTE.length];
 const heatClass = (h) => (h < 0.6 ? 'ok' : h < 0.85 ? 'warn' : 'danger');
 function fmtCountdown(s) { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60; return `${h}:${String(m).padStart(2, '0')}:${String(x).padStart(2, '0')}`; }
 const tok = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR')); // null nunca vira 0
@@ -331,30 +341,33 @@ function usageSparkline(spark) {
   if (!spark || !spark.length) return '<div class="muted" style="font-size:11px">sem série de burn</div>';
   const w = 100, h = 28, bw = w / spark.length;
   const max = Math.max(...spark.map((s) => s.cost).filter((c) => c != null), 0) || 1;
-  const bars = spark.map((s, i) => { // null = gap (não plota como 0)
-    if (s.cost == null) return '';
-    const bh = (s.cost / max) * h;
-    return `<rect x="${(i * bw).toFixed(1)}" y="${(h - bh).toFixed(1)}" width="${(bw * 0.72).toFixed(1)}" height="${bh.toFixed(1)}" rx="0.5" class="spk-bar"/>`;
+  const baseline = `<line x1="0" y1="${h - 0.5}" x2="${w}" y2="${h - 0.5}" class="spk-base"/>`;
+  const bars = spark.map((s, i) => {
+    const x = (i * bw).toFixed(1), bwid = (bw * 0.72).toFixed(1);
+    // janela sem custo conhecido: tick de 1px no baseline (série contínua, não marcas soltas)
+    if (s.cost == null) return `<rect x="${x}" y="${h - 1}" width="${bwid}" height="1" class="spk-empty"/>`;
+    const bh = Math.max(1, (s.cost / max) * h);
+    return `<rect x="${x}" y="${(h - bh).toFixed(1)}" width="${bwid}" height="${bh.toFixed(1)}" rx="0.5" class="spk-bar"><title>${usd(s.cost)}</title></rect>`;
   }).join('');
-  return `<svg viewBox="0 0 ${w} ${h}" class="isl-spark" preserveAspectRatio="none" aria-label="Burn das últimas 2h">${bars}</svg>`;
+  return `<svg viewBox="0 0 ${w} ${h}" class="isl-spark" preserveAspectRatio="none" aria-label="Burn das últimas 2h">${baseline}${bars}</svg>`;
 }
 function usageHistory(history) {
   if (!history || !history.length) return '<div class="muted" style="font-size:11px">sem histórico</div>';
+  const order = modelOrder(history); // maior total → primeiro (fica embaixo na pilha)
+  // Agrega por dia e por rótulo (excedente já mapeado p/ 'outros'), somando colisões.
   const byDay = {};
-  for (const r of history) (byDay[r.dia] = byDay[r.dia] || []).push(r);
+  for (const r of history) { const d = (byDay[r.dia] = byDay[r.dia] || {}); const l = labelOf(r.model, order); d[l] = (d[l] || 0) + (r.tokens || 0); }
   const dias = Object.keys(byDay).sort().slice(-14);
-  const models = [...new Set(history.map((r) => r.model))];
-  const colorFor = (m) => `var(${MODEL_COLORS[Math.max(0, models.indexOf(m)) % MODEL_COLORS.length]})`;
-  const totalDia = (d) => byDay[d].reduce((a, r) => a + (r.tokens || 0), 0);
+  const totalDia = (d) => Object.values(byDay[d]).reduce((a, t) => a + t, 0);
   const maxTok = Math.max(...dias.map(totalDia), 1);
   const W = 280, H = 84, bw = W / dias.length;
   const bars = dias.map((d, i) => {
     let y = H;
-    return byDay[d].map((r) => { const hh = ((r.tokens || 0) / maxTok) * (H - 2); y -= hh; return `<rect x="${(i * bw + 2).toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - 4).toFixed(1)}" height="${hh.toFixed(1)}" fill="${colorFor(r.model)}" rx="1"><title>${esc(d)} · ${esc(r.model)} · ${tok(r.tokens)} tok</title></rect>`; }).join('');
+    return order.filter((m) => byDay[d][m]).map((m) => { const t = byDay[d][m]; const hh = (t / maxTok) * (H - 2); y -= hh; return `<rect x="${(i * bw + 2).toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - 4).toFixed(1)}" height="${hh.toFixed(1)}" fill="${colorFor(m, order)}" rx="1"><title>${esc(d)} · ${esc(m)} · ${tok(t)} tok (${Math.round(t / totalDia(d) * 100)}%)</title></rect>`; }).join('');
   }).join('');
-  const legend = models.map((m) => `<span class="isl-leg"><i style="background:${colorFor(m)}"></i>${esc(m)}</span>`).join('');
+  const legend = order.map((m) => `<span class="isl-leg"><i style="background:${colorFor(m, order)}"></i>${esc(m)}</span>`).join('');
   return `<div class="isl-hist">
-    <div class="isl-hist-ymax">${tok(maxTok)} tok</div>
+    <div class="isl-hist-ymax">máx/dia ${tok(maxTok)} tok</div>
     <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="isl-hbars">${bars}</svg>
     <div class="isl-hist-x"><span>${esc(dias[0] || '')}</span><span>${esc(dias.at(-1) || '')}</span></div>
     <div class="isl-legend">${legend}</div></div>`;
@@ -367,8 +380,7 @@ function usagePanel() {
   if (!u.block) return `<section id="usage-panel">${head}${emptyState('clock', 'Nenhum bloco de uso ativo', 'Sessão ainda não iniciada — nenhuma atividade do Claude Code nas últimas 5h.')}</section>`;
   const st = islandState();
   const f = Math.min(1, Math.max(0, (BLOCO_S - st.remaining) / BLOCO_S));
-  const hoje = new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD local
-  const totalHoje = (u.history || []).filter((r) => r.dia === hoje).reduce((a, r) => (r.cost == null ? a : (a || 0) + r.cost), null);
+  const totalHoje = u.cost_today ?? null; // custo do dia vem agregado do backend (history não carrega mais cost)
   const ring = `<svg viewBox="0 0 120 120" class="isl-ringsvg h-${heatClass(st.heat)}">
     <circle cx="60" cy="60" r="${ISL_R}" class="ring-bg"/>
     <circle cx="60" cy="60" r="${ISL_R}" id="isl-ring-fg" class="ring-fg" style="stroke-dasharray:${ISL_C.toFixed(1)};stroke-dashoffset:${(ISL_C * (1 - f)).toFixed(1)}"/>

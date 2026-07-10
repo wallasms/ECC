@@ -9,7 +9,7 @@ import { join } from 'node:path';
 process.env.ACC_DATA = mkdtempSync(join(tmpdir(), 'acc-usage-'));
 const { blocos_5h } = await import('../src/server.js');
 const { custo_estimado } = await import('../src/scanner.js');
-const { serie_de_usage, analisar_jsonl } = await import('../src/parsers.js');
+const { serie_de_usage, analisar_jsonl, tokens_por_modelo } = await import('../src/parsers.js');
 
 const NL = String.fromCharCode(10);
 const stats = { birthtime: new Date('2026-01-01'), mtime: new Date('2026-01-02') };
@@ -56,6 +56,23 @@ test('serie_de_usage: só mensagens Claude com usage E timestamp', () => {
   const serie = serie_de_usage(registros);
   assert.equal(serie.length, 1);
   assert.deepEqual(serie[0], { ts: '2026-01-01T00:00:00Z', input: 1, output: 0, cache_read: 0, cache_write: 0, model: 'claude-opus-4-8' });
+});
+
+test('tokens_por_modelo: split por message.model e invariante Σ == total', () => {
+  const msg = (model, i) => ({ type: 'assistant', timestamp: `2026-01-01T00:0${i}:00Z`, message: { model, usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 2, cache_creation_input_tokens: 1 } } });
+  // sessão que troca de modelo no meio (opus → sonnet)
+  const registros = [msg('claude-opus-4-8', 1), msg('claude-opus-4-8', 2), msg('claude-sonnet-5', 3)];
+  const por = tokens_por_modelo(registros);
+  assert.equal(por['claude-opus-4-8'], 36); // 2 × (10+5+2+1)
+  assert.equal(por['claude-sonnet-5'], 18); // 1 × 18
+  // invariante: soma por modelo == total do extrair_usage
+  const total = Object.values(por).reduce((a, b) => a + b, 0);
+  assert.equal(total, 54);
+});
+
+test('tokens_por_modelo: Codex (sem message.usage) → vazio; mensagem sem model ignorada', () => {
+  assert.deepEqual(tokens_por_modelo([{ payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 100 } } } }]), {});
+  assert.deepEqual(tokens_por_modelo([{ timestamp: 't', message: { usage: { input_tokens: 9 } } }]), {}); // sem model
 });
 
 test('blocos_5h: floor para hora cheia UTC, janela de 5h', () => {

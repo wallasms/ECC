@@ -76,6 +76,10 @@ function salvar_sessao(db, sessao, stats) {
   db.prepare('DELETE FROM session_events WHERE session_id=?').run(sessao.id);
   const inserir = db.prepare('INSERT OR REPLACE INTO session_events(session_id,position,timestamp,kind,role,summary) VALUES(?,?,?,?,?,?)');
   for (const evento of sessao.events) inserir.run(sessao.id, evento.position, evento.timestamp, evento.kind, evento.role, evento.summary);
+  // Atribuição de tokens por modelo (14 dias por modelo é agregado disto, não de sessions.model).
+  db.prepare('DELETE FROM session_model_tokens WHERE session_id=?').run(sessao.id);
+  const inserir_mt = db.prepare('INSERT OR REPLACE INTO session_model_tokens(session_id,model,tokens) VALUES(?,?,?)');
+  for (const [model, tokens] of Object.entries(sessao.model_tokens || {})) if (tokens > 0) inserir_mt.run(sessao.id, model, tokens);
 }
 
 function escanear_sessoes(db, settings, run_id, full) {

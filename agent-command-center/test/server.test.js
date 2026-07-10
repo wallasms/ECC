@@ -105,6 +105,39 @@ test('/api/usage sem atividade recente → block:null (não fabrica)', async (t)
   assert.ok(Array.isArray(u.spark) && u.spark.length === 24);
 });
 
+test('/api/usage history: atribuição por modelo, sem null, fallback desconhecido', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'acc-usage-hist-'));
+  writeFileSync(join(dir, 'settings.json'), JSON.stringify({
+    session_paths: { codex: [], claude: [] }, skill_paths: { codex: [], claude: [], shared: [] },
+    agent_paths: [], hook_paths: [], project_roots: [], scan_on_start: false
+  }));
+  const db = abrir_banco(join(dir, 'agent-command-center.sqlite'));
+  const hoje = new Date().toISOString();
+  const ins = db.prepare(`INSERT INTO sessions(id,source,source_path,project_id,title,status,model,effort,created_at,updated_at,tokens,cost,snippet,source_mtime,source_size) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  // sessão multi-modelo COM linhas de model_tokens (atribuição precisa)
+  ins.run('s-multi', 'claude', '/p/multi.jsonl', null, 'Multi', 'completed', 'claude-sonnet-5', null, hoje, hoje, 300, 2.5, 'x', 1, 10);
+  db.prepare('INSERT INTO session_model_tokens(session_id,model,tokens) VALUES(?,?,?)').run('s-multi', 'claude-opus-4-8', 200);
+  db.prepare('INSERT INTO session_model_tokens(session_id,model,tokens) VALUES(?,?,?)').run('s-multi', 'claude-sonnet-5', 100);
+  // sessão SEM model_tokens e SEM model → fallback 'desconhecido'
+  ins.run('s-null', 'claude', '/p/null.jsonl', null, 'Null', 'completed', null, null, hoje, hoje, 50, null, 'x', 2, 10);
+  // sessão com model=null e 0 token → NÃO deve aparecer (tokens>0)
+  ins.run('s-zero', 'claude', '/p/zero.jsonl', null, 'Zero', 'completed', null, null, hoje, hoje, 0, null, 'x', 3, 10);
+  db.close();
+  const port = PORT + 3;
+  const proc = spawn(process.execPath, [SERVER], { env: { ...process.env, ACC_DATA: dir, ACC_PORT: String(port) }, stdio: 'ignore' });
+  t.after(async () => { proc.kill(); await new Promise((r) => { proc.on('exit', r); setTimeout(r, 2000); }); try { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 }); } catch { /* tmp */ } });
+  for (let i = 0; i < 60; i += 1) { try { if ((await fetch(`http://127.0.0.1:${port}/api/health`)).ok) break; } catch { /* subindo */ } await new Promise((r) => setTimeout(r, 100)); }
+
+  const u = await (await fetch(`http://127.0.0.1:${port}/api/usage`)).json();
+  const byModel = Object.fromEntries(u.history.map((r) => [r.model, r.tokens]));
+  assert.equal(byModel['claude-opus-4-8'], 200);     // do model_tokens, não de sessions.model
+  assert.equal(byModel['claude-sonnet-5'], 100);     // idem — atribuição precisa, não os 300 da coluna
+  assert.equal(byModel['desconhecido'], 50);         // fallback da sessão sem model_tokens/model
+  assert.ok(!u.history.some((r) => r.model === null), 'nenhum model:null no history');
+  assert.ok(!u.history.some((r) => r.tokens === 0), 'nenhuma linha de 0 token');
+  assert.ok(typeof u.cost_today === 'number', 'cost_today agregado');
+});
+
 test('contratos /api/* (sort, busca em eventos, custo, scan full)', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'acc-test-'));
   writeFileSync(join(dir, 'settings.json'), JSON.stringify({

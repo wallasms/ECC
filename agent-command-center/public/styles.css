@@ -538,7 +538,7 @@ dialog::backdrop{background:#0006;backdrop-filter:blur(4px)}
 .isl-stat .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
 .isl-stat b{font-size:15px;font-variant-numeric:tabular-nums}
 .isl-cap{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px}
-.isl-spark{width:100%;height:34px}.spk-bar{fill:var(--accent)}
+.isl-spark{width:100%;height:34px}.spk-bar{fill:var(--accent)}.spk-base{stroke:var(--border);stroke-width:1;vector-effect:non-scaling-stroke}.spk-empty{fill:var(--border-soft)}
 .isl-hist{position:relative}
 .isl-hbars{width:100%;height:84px;display:block}
 .isl-hist-ymax{font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums;margin-bottom:2px}

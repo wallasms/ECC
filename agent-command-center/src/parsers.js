@@ -212,6 +212,22 @@ export function serie_de_usage(registros) {
   return serie;
 }
 
+// Tokens agregados por modelo DENTRO de uma sessão (sessões trocam de modelo no
+// meio). Claude-only: só message.usage traz tokens+model por mensagem. Codex não
+// tem usage por-mensagem → retorna {} e o caller cai no fallback sessions.model.
+// Invariante: Σ dos valores == extrair_usage(...).total para sessões Claude.
+export function tokens_por_modelo(registros) {
+  const por = {};
+  for (const r of registros) {
+    const u = r?.message?.usage;
+    if (!u || typeof u !== 'object') continue;
+    const m = r.message.model || null;
+    if (!m) continue; // sem modelo na mensagem → não inventa rótulo
+    por[m] = (por[m] || 0) + (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+  }
+  return por;
+}
+
 export function analisar_jsonl(conteudo, arquivo, stats, origem_forcada) {
   const avisos = [];
   const registros = [];
@@ -238,6 +254,7 @@ export function analisar_jsonl(conteudo, arquivo, stats, origem_forcada) {
   }))].slice(0, 50);
   const files = arquivos_de_tools(registros);
   const usage = extrair_usage(registros);
+  const model_tokens = tokens_por_modelo(registros);
   return {
     id: meta.id || registros.find((r) => r?.sessionId)?.sessionId || basename(arquivo, '.jsonl'),
     source: origem, source_path: arquivo, project_path,
@@ -246,7 +263,7 @@ export function analisar_jsonl(conteudo, arquivo, stats, origem_forcada) {
     model: registros.find((r) => r?.type === 'turn_context')?.payload?.model || meta.model || registros.find((r) => r?.message?.model)?.message?.model || registros.find((r) => r?.model)?.model || null,
     effort: registros.find((r) => r?.payload?.effort)?.payload?.effort || null,
     created_at: criado_em, updated_at: atualizado_em,
-    tokens: usage?.total || null, usage, cost: null,
+    tokens: usage?.total || null, usage, cost: null, model_tokens,
     snippet: titulo(eventos.at(-1)?.summary || primeiro, 'not detected'),
     tools, files, warnings: avisos, events: eventos.slice(-500)
   };

@@ -58,6 +58,11 @@ export function abrir_banco(caminho) {
       id INTEGER PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
       name TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 1, UNIQUE(session_id, name)
     );
+    CREATE TABLE IF NOT EXISTS session_model_tokens (
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      model TEXT NOT NULL, tokens INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (session_id, model)
+    );
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS scan_runs (
       id INTEGER PRIMARY KEY, started_at TEXT NOT NULL, finished_at TEXT,

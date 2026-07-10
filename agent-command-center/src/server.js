@@ -220,10 +220,21 @@ function usage() {
     if (c !== null) spark[idx].cost = (spark[idx].cost || 0) + c;
   }
 
-  // Histórico: 14 dias direto do SQLite (agregação por sessão; sem reler jsonl antigo).
+  // Histórico: 14 dias do SQLite. Tokens POR MODELO vêm de session_model_tokens
+  // (atribuição por mensagem, precisa); sessões sem essas linhas (Codex ou pré-
+  // migração) caem no fallback sessions.model → 'desconhecido'. tokens>0 elimina
+  // ruído (null/synthetic sem uso). Custo por dia é agregado à parte (o breakdown
+  // por modelo não guarda input/output/cache p/ custo preciso — vem de sessions.cost).
   const catorze_d = new Date(agora - 14 * 24 * 3600_000).toISOString();
-  const history = db.prepare(`SELECT date(updated_at) dia, model, COALESCE(SUM(tokens),0) tokens, SUM(cost) cost
-    FROM sessions WHERE updated_at >= ? GROUP BY dia, model ORDER BY dia`).all(catorze_d);
+  const history = db.prepare(`SELECT dia, model, SUM(tokens) tokens FROM (
+      SELECT date(s.updated_at) dia, mt.model model, mt.tokens tokens
+        FROM session_model_tokens mt JOIN sessions s ON s.id=mt.session_id WHERE s.updated_at >= ?
+      UNION ALL
+      SELECT date(s.updated_at) dia, COALESCE(s.model,'desconhecido') model, COALESCE(s.tokens,0) tokens
+        FROM sessions s WHERE s.updated_at >= ? AND NOT EXISTS (SELECT 1 FROM session_model_tokens mt WHERE mt.session_id=s.id)
+    ) GROUP BY dia, model HAVING tokens > 0 ORDER BY dia`).all(catorze_d, catorze_d);
+  const hoje = new Date(agora).toISOString().slice(0, 10);
+  const cost_today = db.prepare("SELECT SUM(cost) c FROM sessions WHERE date(updated_at)=?").get(hoje)?.c ?? null;
 
   // Teto do bloco: override em settings, senão o MAIOR total de tokens/dia dos 14 dias.
   // ponytail: proxy do "--token-limit max" do ccusage sem reler 14 dias de jsonl.
@@ -236,7 +247,7 @@ function usage() {
   const modelos = [...new Set(serie.map((e) => e.model).filter(Boolean))];
   const rates_known = Object.fromEntries(modelos.map((m) => [m, Boolean(Object.keys(rates).find((k) => m.startsWith(k)))]));
 
-  return { block, spark, history, limit, pct_consumed, rates_known };
+  return { block, spark, history, cost_today, limit, pct_consumed, rates_known };
 }
 
 function dashboard() {
