@@ -176,6 +176,28 @@ function extrair_usage(registros) {
   return null;
 }
 
+// Série temporal de usage por mensagem — base para bloco 5h e burn rate.
+// Claude-only por design: só as mensagens assistant do Claude trazem
+// message.usage COM timestamp por mensagem. O token_count do Codex é cumulativo
+// e sem timestamp confiável por delta, então fica fora do bloco (mesmo teto do
+// claude-island original, que também só cobre Claude Code).
+export function serie_de_usage(registros) {
+  const serie = [];
+  for (const r of registros) {
+    const u = r?.message?.usage;
+    if (!u || typeof u !== 'object' || !r.timestamp) continue;
+    serie.push({
+      ts: r.timestamp,
+      input: u.input_tokens || 0,
+      output: u.output_tokens || 0,
+      cache_read: u.cache_read_input_tokens || 0,
+      cache_write: u.cache_creation_input_tokens || 0,
+      model: r.message.model || null
+    });
+  }
+  return serie;
+}
+
 export function analisar_jsonl(conteudo, arquivo, stats, origem_forcada) {
   const avisos = [];
   const registros = [];

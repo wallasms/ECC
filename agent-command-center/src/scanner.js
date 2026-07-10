@@ -7,7 +7,7 @@ const MAX_ARQUIVO = 25 * 1024 * 1024;
 
 // Custo estimado em USD. Modelo sem rate conhecido → null (NUNCA 0: 0 gravado
 // polui o HAVING do dashboard e viola o "never fabricate data" do roadmap).
-function custo_estimado(sessao, rates) {
+export function custo_estimado(sessao, rates) {
   if (!sessao.usage || !sessao.model) return null;
   const chave = Object.keys(rates).find((k) => sessao.model.startsWith(k));
   if (!chave) return null;

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { analisar_jsonl, redigir } from '../src/parsers.js';
+import { analisar_jsonl, redigir, serie_de_usage } from '../src/parsers.js';
 
 const stats = { birthtime: new Date('2026-01-01'), mtime: new Date('2026-01-02') };
 
@@ -60,6 +60,24 @@ test('Claude tool_result is_error vira stderr', () => {
   ].map(JSON.stringify).join('\n');
   const r = analisar_jsonl(input, 'C:\\Users\\me\\.claude\\projects\\p\\x.jsonl', stats, 'claude');
   assert.equal(r.events.find((e) => e.summary.includes('boom')).kind, 'stderr');
+});
+
+test('serie_de_usage extrai ts+usage na ordem e ignora registros sem usage', () => {
+  const registros = [
+    { type:'assistant', timestamp:'2026-01-01T00:01:00Z', message:{ role:'assistant', model:'claude-sonnet-5', usage:{ input_tokens:10, output_tokens:5, cache_read_input_tokens:100, cache_creation_input_tokens:20 } } },
+    { type:'user', timestamp:'2026-01-01T00:02:00Z', message:{ role:'user', content:[{ type:'text', text:'sem usage' }] } },
+    { type:'assistant', timestamp:'2026-01-01T00:03:00Z', message:{ role:'assistant', model:'claude-opus-4-8', usage:{ input_tokens:1, output_tokens:2, cache_read_input_tokens:3, cache_creation_input_tokens:4 } } }
+  ];
+  const serie = serie_de_usage(registros);
+  assert.equal(serie.length, 2); // ignora o registro sem usage
+  assert.deepEqual(serie.map((e) => e.ts), ['2026-01-01T00:01:00Z', '2026-01-01T00:03:00Z']);
+  assert.equal(serie[0].input, 10); assert.equal(serie[0].cache_write, 20); assert.equal(serie[0].model, 'claude-sonnet-5');
+  assert.equal(serie[1].model, 'claude-opus-4-8');
+});
+
+test('serie_de_usage ignora usage sem timestamp confiável', () => {
+  const serie = serie_de_usage([{ type:'assistant', message:{ role:'assistant', usage:{ input_tokens:5, output_tokens:5 } } }]);
+  assert.equal(serie.length, 0);
 });
 
 test('Codex function_call_output desembrulha JSON e marca stderr por exit_code', () => {

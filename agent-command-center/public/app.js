@@ -264,7 +264,134 @@ async function dashboard() {
     : emptyState('check', 'Tudo tranquilo', 'Nenhuma sessão precisa de atenção agora.')}</div></section>`;
   const recent = `<section><h2>Sessões recentes</h2>${tabela(d.recent.slice(0, 8))}</section>`;
   const projects = d.projects.length ? `<h2>Consumo por projeto</h2><div class="surface">${d.projects.map((p) => `<div class="usage clickable" tabindex="0" role="button" data-project="${esc(p.name)}"><b>${esc(p.name)}</b><small>${p.sessions} sessões</small><span>${p.tokens.toLocaleString('pt-BR')} tokens</span><span>${p.cost ? usd(p.cost) : '—'}</span></div>`).join('')}</div>` : '';
-  return shell(saudacao(), 'Atividade local dos seus agentes.', `${hero}${stats}${strip}${canvasPrev}<div class="grid">${recent}${attention}</div>${projects}`, scan);
+  return shell(saudacao(), 'Atividade local dos seus agentes.', `${hero}${stats}${usagePanel()}${strip}${canvasPrev}<div class="grid">${recent}${attention}</div>${projects}`, scan);
+}
+
+/* ---------- Claude Island: pill de uso do bloco de 5h + painel ----------
+   Fonte: GET /api/usage (Fase 1). Custo é sempre "estimado" (rates locais).
+   Poll de 60s + tick local de 1s que decrementa o countdown e ACUMULA o custo
+   entre polls (block.cost + burn_rate_hr × Δt), snapando no valor real a cada poll. */
+const BLOCO_S = 5 * 3600; // bloco de 5h em segundos
+const ISL_R = 52, ISL_C = 2 * Math.PI * ISL_R; // raio/circunferência do anel SVG
+const MODEL_COLORS = ['--accent', '--st-working', '--st-needs', '--st-completed', '--st-failed', '--st-stale'];
+const heatClass = (h) => (h < 0.6 ? 'ok' : h < 0.85 ? 'warn' : 'danger');
+function fmtCountdown(s) { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60; return `${h}:${String(m).padStart(2, '0')}:${String(x).padStart(2, '0')}`; }
+const tok = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR')); // null nunca vira 0
+const custo = (v) => (v == null ? '—' : usd(v));
+
+const ISLAND = {
+  data: null, fetchedAt: 0, pollTimer: null, tickTimer: null,
+  async fetch() { try { this.data = await api('/api/usage'); this.fetchedAt = Date.now(); } catch { /* mantém último dado; não zera */ } paintIsland(); },
+  tick() {
+    if (document.hidden) return; // aba oculta: pausa (padrão do Ao Vivo)
+    const st = islandState();
+    if (st && st.remaining <= 0 && Date.now() - this.fetchedAt > 2000) { this.fetch(); return; } // countdown zerou → refetch imediato
+    paintIsland();
+  },
+  start() {
+    this.fetch();
+    this.pollTimer = setInterval(() => { if (!document.hidden) this.fetch(); }, 60000);
+    this.tickTimer = setInterval(() => this.tick(), 1000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) this.fetch(); }); // volta a ficar visível → snapa
+  },
+  stop() { clearInterval(this.pollTimer); clearInterval(this.tickTimer); },
+};
+// Estado derivado do último /api/usage + decorrido local. null = sem bloco ativo.
+function islandState() {
+  const u = ISLAND.data; if (!u || !u.block) return null;
+  const b = u.block;
+  const dt = (Date.now() - ISLAND.fetchedAt) / 1000; // segundos desde o último fetch
+  const remaining = Math.max(0, b.remaining_s - dt);
+  const cost = b.cost == null ? null : (b.burn_rate_hr ? b.cost + b.burn_rate_hr * (dt / 3600) : b.cost); // acúmulo contínuo
+  const heat = u.pct_consumed != null ? u.pct_consumed : (BLOCO_S - remaining) / BLOCO_S; // fallback: fração decorrida do bloco
+  return { b, u, remaining, cost, heat, pct: u.pct_consumed };
+}
+function islandPillHTML(st) {
+  if (!ISLAND.data) return `<span class="isl-dot"></span><span class="isl-txt muted">uso…</span>`;
+  if (!st) return `<span class="isl-dot"></span><span class="isl-txt">sem bloco ativo</span><span class="isl-cost muted"> · —</span>`;
+  const pct = st.pct != null ? `<span class="isl-pct">${Math.round(st.pct * 100)}% · </span>` : '';
+  return `<span class="isl-dot ${heatClass(st.heat)}"></span>${pct}<span class="isl-cost">${custo(st.cost)}</span><span class="isl-time"> · <span class="isl-lbl">reset em </span>${fmtCountdown(st.remaining)}</span>`;
+}
+// Atualiza a pill (sempre) e os elementos vivos do painel (se estiver montado no Dashboard).
+function paintIsland() {
+  const el = $('#island'); if (!el) return;
+  const st = islandState();
+  el.innerHTML = islandPillHTML(st);
+  el.classList.remove('h-ok', 'h-warn', 'h-danger', 'h-none');
+  el.classList.add(st ? 'h-' + heatClass(st.heat) : 'h-none');
+  const ring = $('#isl-ring-time');
+  if (ring && st) {
+    ring.textContent = fmtCountdown(st.remaining);
+    const fg = $('#isl-ring-fg');
+    if (fg) { const f = Math.min(1, Math.max(0, (BLOCO_S - st.remaining) / BLOCO_S)); fg.style.strokeDashoffset = ISL_C * (1 - f); }
+    const cs = $('#isl-cost-stat'); if (cs) cs.textContent = custo(st.cost);
+  }
+}
+function usageSparkline(spark) {
+  if (!spark || !spark.length) return '<div class="muted" style="font-size:11px">sem série de burn</div>';
+  const w = 100, h = 28, bw = w / spark.length;
+  const max = Math.max(...spark.map((s) => s.cost).filter((c) => c != null), 0) || 1;
+  const bars = spark.map((s, i) => { // null = gap (não plota como 0)
+    if (s.cost == null) return '';
+    const bh = (s.cost / max) * h;
+    return `<rect x="${(i * bw).toFixed(1)}" y="${(h - bh).toFixed(1)}" width="${(bw * 0.72).toFixed(1)}" height="${bh.toFixed(1)}" rx="0.5" class="spk-bar"/>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" class="isl-spark" preserveAspectRatio="none" aria-label="Burn das últimas 2h">${bars}</svg>`;
+}
+function usageHistory(history) {
+  if (!history || !history.length) return '<div class="muted" style="font-size:11px">sem histórico</div>';
+  const byDay = {};
+  for (const r of history) (byDay[r.dia] = byDay[r.dia] || []).push(r);
+  const dias = Object.keys(byDay).sort().slice(-14);
+  const models = [...new Set(history.map((r) => r.model))];
+  const colorFor = (m) => `var(${MODEL_COLORS[Math.max(0, models.indexOf(m)) % MODEL_COLORS.length]})`;
+  const totalDia = (d) => byDay[d].reduce((a, r) => a + (r.tokens || 0), 0);
+  const maxTok = Math.max(...dias.map(totalDia), 1);
+  const W = 280, H = 84, bw = W / dias.length;
+  const bars = dias.map((d, i) => {
+    let y = H;
+    return byDay[d].map((r) => { const hh = ((r.tokens || 0) / maxTok) * (H - 2); y -= hh; return `<rect x="${(i * bw + 2).toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - 4).toFixed(1)}" height="${hh.toFixed(1)}" fill="${colorFor(r.model)}" rx="1"><title>${esc(d)} · ${esc(r.model)} · ${tok(r.tokens)} tok</title></rect>`; }).join('');
+  }).join('');
+  const legend = models.map((m) => `<span class="isl-leg"><i style="background:${colorFor(m)}"></i>${esc(m)}</span>`).join('');
+  return `<div class="isl-hist">
+    <div class="isl-hist-ymax">${tok(maxTok)} tok</div>
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="isl-hbars">${bars}</svg>
+    <div class="isl-hist-x"><span>${esc(dias[0] || '')}</span><span>${esc(dias.at(-1) || '')}</span></div>
+    <div class="isl-legend">${legend}</div></div>`;
+}
+// Painel "Uso" no Dashboard. Renderiza do cache do ISLAND (evita 2º fetch); vazio → estado vazio, nunca charts zerados.
+function usagePanel() {
+  const u = ISLAND.data;
+  const head = `<div class="section-head"><h2>Uso — bloco de 5h <span class="pill">estimado</span></h2></div>`;
+  if (!u) return `<section id="usage-panel">${head}<div class="surface" style="padding:16px"><span class="muted">carregando…</span></div></section>`;
+  if (!u.block) return `<section id="usage-panel">${head}${emptyState('clock', 'Nenhum bloco de uso ativo', 'Sessão ainda não iniciada — nenhuma atividade do Claude Code nas últimas 5h.')}</section>`;
+  const st = islandState();
+  const f = Math.min(1, Math.max(0, (BLOCO_S - st.remaining) / BLOCO_S));
+  const hoje = new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD local
+  const totalHoje = (u.history || []).filter((r) => r.dia === hoje).reduce((a, r) => (r.cost == null ? a : (a || 0) + r.cost), null);
+  const ring = `<svg viewBox="0 0 120 120" class="isl-ringsvg h-${heatClass(st.heat)}">
+    <circle cx="60" cy="60" r="${ISL_R}" class="ring-bg"/>
+    <circle cx="60" cy="60" r="${ISL_R}" id="isl-ring-fg" class="ring-fg" style="stroke-dasharray:${ISL_C.toFixed(1)};stroke-dashoffset:${(ISL_C * (1 - f)).toFixed(1)}"/>
+    <text x="60" y="58" text-anchor="middle" class="ring-time" id="isl-ring-time">${fmtCountdown(st.remaining)}</text>
+    <text x="60" y="76" text-anchor="middle" class="ring-sub">restante</text></svg>`;
+  const stats = [
+    ['Custo', `<b id="isl-cost-stat">${custo(st.cost)}</b>`],
+    ['Tokens', `<b>${tok(st.b.tokens)}</b>`],
+    ['$/h burn', `<b>${custo(st.b.burn_rate_hr)}</b>`],
+    ['Projeção do bloco', `<b>${custo(st.b.projected)}</b>`],
+    ['Total do dia', `<b>${custo(totalHoje)}</b>`],
+  ].map(([k, v]) => `<div class="isl-stat"><span class="lbl">${k}</span>${v}</div>`).join('');
+  return `<section id="usage-panel">${head}
+    <div class="surface isl-body">
+      <div class="isl-ringwrap">${ring}</div>
+      <div class="isl-right">
+        <div class="isl-stats">${stats}</div>
+        <div class="isl-spark-wrap"><span class="isl-cap">Burn últimas 2h</span>${usageSparkline(u.spark)}</div>
+        <div class="isl-hist-wrap"><span class="isl-cap">14 dias por modelo · tokens</span>${usageHistory(u.history)}</div>
+      </div>
+    </div>
+    <p class="muted" style="font-size:11px;margin-top:6px">${ic('alert')} Custo estimado por rates locais (settings) — pode diferir da fatura. Só enxerga sessões dos caminhos escaneados.</p>
+  </section>`;
 }
 
 /* ---------- Sessions ---------- */
@@ -767,6 +894,10 @@ $('#command').onclick = () => $('#command-input').focus();
 window.addEventListener('hashchange', () => { readHash(); render(); });
 $('#theme').onclick = () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 $('#palette-btn').onclick = openPalette;
+// Pill de uso → abre o painel no Dashboard. ISLAND vive fora do #app (topbar), logo
+// tem seu próprio lifecycle e NÃO é reiniciado pelo render()/LIVE.stop() a cada navegação.
+$('#island').onclick = () => { goto('dashboard'); setTimeout(() => $('#usage-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80); };
+ISLAND.start();
 let kbRow = -1; let gPending = false;
 const GCHORD = { d: 'dashboard', l: 'live', t: 'studio', s: 'sessions', p: 'projects', k: 'skills', h: 'hooks', a: 'agents', q: 'prompts' };
 function highlightRow(rows) { rows.forEach((r) => r.classList.remove('kb')); const r = rows[kbRow]; if (r) { r.classList.add('kb'); r.scrollIntoView({ block: 'nearest' }); } }

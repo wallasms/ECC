@@ -36,6 +36,75 @@ async function esperar_saude() {
   throw new Error('Servidor não respondeu /api/health a tempo');
 }
 
+// Seeda uma sessão Claude com .jsonl real e timestamps recentes → bloco 5h ativo.
+function semear_usage(dir, jsonlPath) {
+  const db = abrir_banco(join(dir, 'agent-command-center.sqlite'));
+  const agora = new Date().toISOString();
+  const msg = (ts) => ({ type:'assistant', timestamp:ts, message:{ role:'assistant', model:'claude-sonnet-5',
+    usage:{ input_tokens:1000, output_tokens:500, cache_read_input_tokens:2000, cache_creation_input_tokens:100 } } });
+  const t1 = new Date(Date.now() - 10 * 60_000).toISOString();
+  const t2 = new Date(Date.now() - 5 * 60_000).toISOString();
+  writeFileSync(jsonlPath, [msg(t1), msg(t2)].map(JSON.stringify).join('\n'));
+  db.prepare(`INSERT INTO sessions(id,source,source_path,project_id,title,status,model,effort,created_at,updated_at,tokens,cost,snippet,source_mtime,source_size)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run('s-live', 'claude', jsonlPath, null, 'Live', 'working', 'claude-sonnet-5', null, agora, agora, 7200, 0.023, 'snippet', 1, 10);
+  db.close();
+}
+
+test('/api/usage com bloco ativo (jsonl real semeado)', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'acc-usage-'));
+  writeFileSync(join(dir, 'settings.json'), JSON.stringify({
+    session_paths: { codex: [], claude: [] }, skill_paths: { codex: [], claude: [], shared: [] },
+    agent_paths: [], hook_paths: [], project_roots: [], scan_on_start: false
+  }));
+  semear_usage(dir, join(dir, 'live.jsonl'));
+  const port = PORT + 1;
+  const proc = spawn(process.execPath, [SERVER], { env: { ...process.env, ACC_DATA: dir, ACC_PORT: String(port) }, stdio: 'ignore' });
+  t.after(async () => {
+    proc.kill();
+    await new Promise((r) => { proc.on('exit', r); setTimeout(r, 2000); });
+    try { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 }); } catch { /* lixo em tmp é tolerável */ }
+  });
+  for (let i = 0; i < 60; i += 1) { try { if ((await fetch(`http://127.0.0.1:${port}/api/health`)).ok) break; } catch { /* subindo */ } await new Promise((r) => setTimeout(r, 100)); }
+
+  const u = await (await fetch(`http://127.0.0.1:${port}/api/usage`)).json();
+  assert.ok(u.block, 'bloco ativo existe');
+  assert.equal(u.block.tokens, 7200);           // (1000+500+2000+100) * 2
+  assert.ok(u.block.cost > 0, 'custo estimado > 0 (sonnet tem rate)');
+  assert.ok(u.block.remaining_s > 0 && u.block.remaining_s <= 5 * 3600, 'remaining_s dentro da janela de 5h');
+  assert.ok(u.block.burn_rate_hr > 0);
+  assert.equal(u.spark.length, 24);
+  assert.ok(Array.isArray(u.history));
+  assert.equal(u.rates_known['claude-sonnet-5'], true);
+});
+
+test('/api/usage sem atividade recente → block:null (não fabrica)', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'acc-usage-vazio-'));
+  writeFileSync(join(dir, 'settings.json'), JSON.stringify({
+    session_paths: { codex: [], claude: [] }, skill_paths: { codex: [], claude: [], shared: [] },
+    agent_paths: [], hook_paths: [], project_roots: [], scan_on_start: false
+  }));
+  const db = abrir_banco(join(dir, 'agent-command-center.sqlite'));
+  // sessão Claude antiga (fora da janela de 6h) → série vazia → sem bloco.
+  db.prepare(`INSERT INTO sessions(id,source,source_path,project_id,title,status,model,effort,created_at,updated_at,tokens,cost,snippet,source_mtime,source_size)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run('s-old', 'claude', '/p/old.jsonl', null, 'Old', 'completed', 'm', null, '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z', 100, 1, 'x', 1, 10);
+  db.close();
+  const port = PORT + 2;
+  const proc = spawn(process.execPath, [SERVER], { env: { ...process.env, ACC_DATA: dir, ACC_PORT: String(port) }, stdio: 'ignore' });
+  t.after(async () => {
+    proc.kill();
+    await new Promise((r) => { proc.on('exit', r); setTimeout(r, 2000); });
+    try { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 }); } catch { /* lixo em tmp é tolerável */ }
+  });
+  for (let i = 0; i < 60; i += 1) { try { if ((await fetch(`http://127.0.0.1:${port}/api/health`)).ok) break; } catch { /* subindo */ } await new Promise((r) => setTimeout(r, 100)); }
+
+  const u = await (await fetch(`http://127.0.0.1:${port}/api/usage`)).json();
+  assert.equal(u.block, null);
+  assert.equal(u.pct_consumed, null);
+  assert.ok(Array.isArray(u.spark) && u.spark.length === 24);
+});
+
 test('contratos /api/* (sort, busca em eventos, custo, scan full)', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'acc-test-'));
   writeFileSync(join(dir, 'settings.json'), JSON.stringify({

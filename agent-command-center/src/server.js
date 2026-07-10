@@ -4,8 +4,8 @@ import { homedir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { abrir_banco } from './db.js';
-import { executar_scan } from './scanner.js';
-import { normalizar_evento } from './parsers.js';
+import { executar_scan, custo_estimado } from './scanner.js';
+import { normalizar_evento, serie_de_usage } from './parsers.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = process.env.ACC_DATA || join(ROOT, 'data');
@@ -127,6 +127,118 @@ function tail_sessao(id, from) {
   return { offset, size, status: row.status, lines };
 }
 
+// Relê os bytes de um .jsonl para reconstruir a série de usage. Arquivo grande →
+// lê só a cauda (mesma ideia do tail_sessao), descartando a 1ª linha parcial.
+// ponytail: relê cada .jsonl das últimas ~6h a cada poll; com poucas sessões
+// ativas é barato. Teto: se pesar, cachear registros por mtime.
+const MAX_USAGE_BYTES = 8 * 1024 * 1024;
+function ler_registros(arquivo) {
+  if (!existsSync(arquivo)) return [];
+  const size = statSync(arquivo).size;
+  let buf;
+  if (size > MAX_USAGE_BYTES) {
+    const start = size - MAX_USAGE_BYTES;
+    buf = Buffer.alloc(MAX_USAGE_BYTES);
+    const fd = openSync(arquivo, 'r');
+    try { readSync(fd, buf, 0, MAX_USAGE_BYTES, start); } finally { closeSync(fd); }
+    const f = buf.indexOf(10); if (f >= 0) buf = buf.subarray(f + 1);
+  } else {
+    buf = readFileSync(arquivo);
+  }
+  const registros = [];
+  for (const linha of buf.toString('utf8').split(/\r?\n/)) {
+    if (!linha.trim()) continue;
+    try { registros.push(JSON.parse(linha)); } catch { /* linha parcial/corrompida */ }
+  }
+  return registros;
+}
+
+// Agrupa a série em blocos de 5h à la ccusage: início = 1ª mensagem após o fim
+// do bloco anterior, arredondada para baixo p/ a hora cheia (UTC); fim = início + 5h.
+function blocos_5h(serie) {
+  const CINCO_H = 5 * 3600_000;
+  const ordenada = [...serie].filter((e) => Number.isFinite(Date.parse(e.ts))).sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+  const blocos = [];
+  let atual = null;
+  for (const e of ordenada) {
+    const t = Date.parse(e.ts);
+    if (!atual || t >= atual.fim) {
+      const inicio = Math.floor(t / 3600_000) * 3600_000; // hora cheia UTC
+      atual = { inicio, fim: inicio + CINCO_H, entradas: [] };
+      blocos.push(atual);
+    }
+    atual.entradas.push(e);
+  }
+  return blocos;
+}
+
+function usage() {
+  const rates = settings.model_rates || {};
+  const agora = Date.now();
+  // Custo por mensagem usa o model da PRÓPRIA mensagem (sessões trocam de modelo no meio).
+  const custo_msg = (e) => custo_estimado({ usage: { input: e.input, output: e.output, cache_read: e.cache_read, cache_write: e.cache_write }, model: e.model }, rates);
+  const tokens_msg = (e) => e.input + e.output + e.cache_read + e.cache_write;
+
+  // Bloco: relê só os .jsonl de sessões Claude tocadas nas últimas ~6h.
+  const seis_h = new Date(agora - 6 * 3600_000).toISOString();
+  const rows = db.prepare("SELECT source_path FROM sessions WHERE source='claude' AND updated_at >= ?").all(seis_h);
+  let serie = [];
+  for (const row of rows) serie = serie.concat(serie_de_usage(ler_registros(row.source_path)));
+
+  const blocos = blocos_5h(serie);
+  const ultimo = blocos[blocos.length - 1];
+  const ativo = ultimo && agora < ultimo.fim ? ultimo : null; // sem atividade nas últimas 5h → null (não fabrica bloco zerado)
+
+  let block = null;
+  if (ativo) {
+    let cost = null; let tokens = 0;
+    for (const e of ativo.entradas) {
+      const c = custo_msg(e);
+      if (c !== null) cost = (cost || 0) + c; // modelo sem rate → contribuição nula, nunca 0
+      tokens += tokens_msg(e);
+    }
+    const elapsed_min = Math.max(1, (agora - ativo.inicio) / 60_000); // mín. 1 min p/ não dividir por ~0
+    const burn_rate_hr = cost === null ? null : (cost * 60) / elapsed_min;
+    block = {
+      start: new Date(ativo.inicio).toISOString(),
+      end: new Date(ativo.fim).toISOString(),
+      remaining_s: Math.max(0, Math.round((ativo.fim - agora) / 1000)),
+      cost, tokens, burn_rate_hr,
+      projected: burn_rate_hr === null ? null : burn_rate_hr * 5
+    };
+  }
+
+  // Sparkline: últimos 120 min em 24 janelas de 5 min (custo/janela; null se nada conhecido).
+  const inicio_spark = agora - 120 * 60_000;
+  const spark = Array.from({ length: 24 }, (_, i) => ({ t: new Date(inicio_spark + i * 5 * 60_000).toISOString(), cost: null }));
+  for (const e of serie) {
+    const t = Date.parse(e.ts);
+    if (!Number.isFinite(t) || t < inicio_spark || t >= agora) continue;
+    const idx = Math.floor((t - inicio_spark) / (5 * 60_000));
+    if (idx < 0 || idx >= spark.length) continue;
+    const c = custo_msg(e);
+    if (c !== null) spark[idx].cost = (spark[idx].cost || 0) + c;
+  }
+
+  // Histórico: 14 dias direto do SQLite (agregação por sessão; sem reler jsonl antigo).
+  const catorze_d = new Date(agora - 14 * 24 * 3600_000).toISOString();
+  const history = db.prepare(`SELECT date(updated_at) dia, model, COALESCE(SUM(tokens),0) tokens, SUM(cost) cost
+    FROM sessions WHERE updated_at >= ? GROUP BY dia, model ORDER BY dia`).all(catorze_d);
+
+  // Teto do bloco: override em settings, senão o MAIOR total de tokens/dia dos 14 dias.
+  // ponytail: proxy do "--token-limit max" do ccusage sem reler 14 dias de jsonl.
+  // Teto: superestima quando há >1 bloco no mesmo dia; p/ precisão, definir settings.block_limit_tokens.
+  const override = Number(settings.block_limit_tokens) || null;
+  const max_dia = db.prepare(`SELECT MAX(t) m FROM (SELECT date(updated_at) d, SUM(tokens) t FROM sessions WHERE updated_at >= ? AND source='claude' GROUP BY d)`).get(catorze_d)?.m || null;
+  const limit = override || max_dia;
+  const pct_consumed = block && limit ? block.tokens / limit : null;
+
+  const modelos = [...new Set(serie.map((e) => e.model).filter(Boolean))];
+  const rates_known = Object.fromEntries(modelos.map((m) => [m, Boolean(Object.keys(rates).find((k) => m.startsWith(k)))]));
+
+  return { block, spark, history, limit, pct_consumed, rates_known };
+}
+
 function dashboard() {
   const stats = Object.fromEntries(db.prepare('SELECT status,COUNT(*) total FROM sessions GROUP BY status').all().map((r) => [r.status, r.total]));
   return {
@@ -166,6 +278,7 @@ function comando_ui(texto) {
 async function api(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { ok: true, host: HOST, database: 'sqlite', external_apis: false });
   if (req.method === 'GET' && url.pathname === '/api/dashboard') return json(res, 200, dashboard());
+  if (req.method === 'GET' && url.pathname === '/api/usage') return json(res, 200, usage());
   if (req.method === 'GET' && url.pathname === '/api/sessions') return json(res, 200, listar_sessoes(url));
   if (req.method === 'GET' && /^\/api\/sessions\/.+\/tail$/.test(url.pathname)) {
     const partes = url.pathname.split('/');
@@ -226,7 +339,7 @@ async function api(req, res, url) {
   return json(res, 404, { error: 'Rota não encontrada' });
 }
 
-const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/json' };
+const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${HOST}:${PORT}`);
