@@ -1,4 +1,59 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="512" height="512">
-  <rect width="24" height="24" rx="6" fill="#6366f1"/>
-  <path d="M12 5l1.6 4.4L18 11l-4.4 1.6L12 17l-1.6-4.4L6 11l4.4-1.6z" fill="white"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="bg" cx="42%" cy="34%" r="80%">
+      <stop offset="0%" stop-color="#24242e"/>
+      <stop offset="55%" stop-color="#14141a"/>
+      <stop offset="100%" stop-color="#0a0a0e"/>
+    </radialGradient>
+    <linearGradient id="coral" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ef9068"/>
+      <stop offset="55%" stop-color="#d97757"/>
+      <stop offset="100%" stop-color="#c25d3f"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity=".16"/>
+      <stop offset="46%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="vig" cx="50%" cy="50%" r="72%">
+      <stop offset="62%" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity=".30"/>
+    </radialGradient>
+    <!-- glow folgado p/ o blur não ser cortado pelo filterUnits default -->
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="16"/>
+    </filter>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+    <path id="ray" d="M256 256 L245 178 L256 64 L267 178 Z"/>
+    <g id="burst" fill="url(#coral)">
+      <use href="#ray"/>
+      <use href="#ray" transform="rotate(30 256 256)"/>
+      <use href="#ray" transform="rotate(60 256 256)"/>
+      <use href="#ray" transform="rotate(90 256 256)"/>
+      <use href="#ray" transform="rotate(120 256 256)"/>
+      <use href="#ray" transform="rotate(150 256 256)"/>
+      <use href="#ray" transform="rotate(180 256 256)"/>
+      <use href="#ray" transform="rotate(210 256 256)"/>
+      <use href="#ray" transform="rotate(240 256 256)"/>
+      <use href="#ray" transform="rotate(270 256 256)"/>
+      <use href="#ray" transform="rotate(300 256 256)"/>
+      <use href="#ray" transform="rotate(330 256 256)"/>
+    </g>
+    <clipPath id="round"><rect x="0" y="0" width="512" height="512" rx="112"/></clipPath>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <g clip-path="url(#round)">
+    <!-- glow atrás do starburst → profundidade sobre o fundo escuro -->
+    <use href="#burst" filter="url(#glow)" opacity=".55"/>
+    <use href="#burst"/>
+    <!-- núcleo quente do starburst -->
+    <circle cx="256" cy="256" r="26" fill="#f2a074" filter="url(#glow)" opacity=".8"/>
+    <!-- vidro: sheen no topo + highlight de lente difuso -->
+    <ellipse cx="188" cy="150" rx="150" ry="96" fill="#ffffff" opacity=".10" filter="url(#soft)"/>
+    <rect width="512" height="512" fill="url(#glass)"/>
+    <rect width="512" height="512" fill="url(#vig)"/>
+  </g>
+  <rect x="6" y="6" width="500" height="500" rx="106" fill="none" stroke="#ffffff" stroke-opacity=".10" stroke-width="2"/>
 </svg>
