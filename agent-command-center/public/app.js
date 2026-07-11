@@ -75,7 +75,7 @@ const STATUS_LABEL = { working: 'Trabalhando', needs_input: 'Precisa de input', 
 /* ---------- Toasts + status-flip detection ---------- */
 function toast(msg, kind = 'info') {
   let host = $('#toasts');
-  if (!host) { host = document.createElement('div'); host.id = 'toasts'; host.className = 'toasts'; document.body.appendChild(host); }
+  if (!host) { host = document.createElement('div'); host.id = 'toasts'; host.className = 'toasts'; host.setAttribute('role', 'status'); host.setAttribute('aria-live', 'polite'); document.body.appendChild(host); }
   const el = document.createElement('div');
   el.className = 'toast glass t-' + kind; // t- prefixo evita colisão com classes de status (.failed/.needs_input)
   el.innerHTML = `<span class="tdot t-${esc(kind)}"></span><span class="tmsg">${esc(msg)}</span><button class="tx" aria-label="Fechar">✕</button>`;
@@ -219,7 +219,7 @@ function sessionRow(s) {
     </div>
     <div class="mono-badge" style="text-align:right">${fmt(s.updated_at)}</div></div>`;
 }
-function th(label, key) { const on = filters.sort === key || (!filters.sort && key === 'updated_at'); const arrow = on ? (filters.dir === 'asc' ? ' ↑' : ' ↓') : ''; return `<span class="sortable" data-sort="${key}"${key ? ' tabindex="0" role="button"' : ''}>${label}${arrow}</span>`; }
+function th(label, key) { const on = filters.sort === key || (!filters.sort && key === 'updated_at'); const arrow = on ? (filters.dir === 'asc' ? ' ↑' : ' ↓') : ''; const sort = on ? (filters.dir === 'asc' ? 'ascending' : 'descending') : 'none'; return `<span class="sortable" data-sort="${key}"${key ? ` tabindex="0" role="button" aria-sort="${sort}"` : ''}>${label}${arrow}</span>`; }
 function tableHead() { return `<div class="row head">${th('', '')}${th('Sessão', 'title')}<span>Status</span>${th('Agente', 'source')}<span>Modelo</span>${th('Projeto', 'project')}<span></span>${th('Atividade', 'updated_at')}</div>`; }
 function tabela(items, sortable) { return `<div class="surface">${sortable ? tableHead() : ''}${items.length ? items.map(sessionRow).join('') : emptyState('sessions', 'Nenhuma sessão', 'Ajuste os filtros ou reescaneie para indexar novas sessões.', scanCta)}</div>`; }
 // Tabela janelada: só as linhas visíveis + buffer são renderizadas; spacers de altura fixa
@@ -264,7 +264,146 @@ async function dashboard() {
     : emptyState('check', 'Tudo tranquilo', 'Nenhuma sessão precisa de atenção agora.')}</div></section>`;
   const recent = `<section><h2>Sessões recentes</h2>${tabela(d.recent.slice(0, 8))}</section>`;
   const projects = d.projects.length ? `<h2>Consumo por projeto</h2><div class="surface">${d.projects.map((p) => `<div class="usage clickable" tabindex="0" role="button" data-project="${esc(p.name)}"><b>${esc(p.name)}</b><small>${p.sessions} sessões</small><span>${p.tokens.toLocaleString('pt-BR')} tokens</span><span>${p.cost ? usd(p.cost) : '—'}</span></div>`).join('')}</div>` : '';
-  return shell(saudacao(), 'Atividade local dos seus agentes.', `${hero}${stats}${strip}${canvasPrev}<div class="grid">${recent}${attention}</div>${projects}`, scan);
+  return shell(saudacao(), 'Atividade local dos seus agentes.', `${hero}${stats}${usagePanel()}${strip}${canvasPrev}<div class="grid">${recent}${attention}</div>${projects}`, scan);
+}
+
+/* ---------- Claude Island: pill de uso do bloco de 5h + painel ----------
+   Fonte: GET /api/usage (Fase 1). Custo é sempre "estimado" (rates locais).
+   Poll de 60s + tick local de 1s que decrementa o countdown e ACUMULA o custo
+   entre polls (block.cost + burn_rate_hr × Δt), snapando no valor real a cada poll. */
+const BLOCO_S = 5 * 3600; // bloco de 5h em segundos
+const ISL_R = 52, ISL_C = 2 * Math.PI * ISL_R; // raio/circunferência do anel SVG
+// Paleta categórica sóbria (10 hues distintas, legíveis em light E dark). Cores
+// de status (verde/vermelho) foram removidas: pintar um modelo de "failed" mente.
+const MODEL_PALETTE = ['#4e79a7', '#59a14f', '#e1934a', '#c65f5f', '#9c7bb8', '#56a6a0', '#d18aad', '#a6a049', '#a1745e', '#8a8a8a'];
+// Ordena modelos por total desc; >10 → excedente vira 'outros' (cinza). Cor estável por rank.
+function modelOrder(rows) {
+  const tot = {}; for (const r of rows) tot[r.model] = (tot[r.model] || 0) + (r.tokens || 0);
+  const ord = Object.keys(tot).sort((a, b) => tot[b] - tot[a]);
+  return ord.length > 10 ? [...ord.slice(0, 9), 'outros'] : ord;
+}
+const labelOf = (m, order) => (order.includes(m) ? m : 'outros');
+const colorFor = (m, order) => MODEL_PALETTE[Math.max(0, order.indexOf(labelOf(m, order))) % MODEL_PALETTE.length];
+const heatClass = (h) => (h < 0.6 ? 'ok' : h < 0.85 ? 'warn' : 'danger');
+function fmtCountdown(s) { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60; return `${h}:${String(m).padStart(2, '0')}:${String(x).padStart(2, '0')}`; }
+const tok = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR')); // null nunca vira 0
+const custo = (v) => (v == null ? '—' : usd(v));
+
+const ISLAND = {
+  data: null, fetchedAt: 0, pollTimer: null, tickTimer: null,
+  async fetch() { try { this.data = await api('/api/usage'); this.fetchedAt = Date.now(); } catch { /* mantém último dado; não zera */ } paintIsland(); },
+  tick() {
+    if (document.hidden) return; // aba oculta: pausa (padrão do Ao Vivo)
+    const st = islandState();
+    if (st && st.remaining <= 0 && Date.now() - this.fetchedAt > 2000) { this.fetch(); return; } // countdown zerou → refetch imediato
+    paintIsland();
+  },
+  start() {
+    this.fetch();
+    this.pollTimer = setInterval(() => { if (!document.hidden) this.fetch(); }, 60000);
+    this.tickTimer = setInterval(() => this.tick(), 1000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) this.fetch(); }); // volta a ficar visível → snapa
+  },
+  stop() { clearInterval(this.pollTimer); clearInterval(this.tickTimer); },
+};
+// Estado derivado do último /api/usage + decorrido local. null = sem bloco ativo.
+function islandState() {
+  const u = ISLAND.data; if (!u || !u.block) return null;
+  const b = u.block;
+  const dt = (Date.now() - ISLAND.fetchedAt) / 1000; // segundos desde o último fetch
+  const remaining = Math.max(0, b.remaining_s - dt);
+  const cost = b.cost == null ? null : (b.burn_rate_hr ? b.cost + b.burn_rate_hr * (dt / 3600) : b.cost); // acúmulo contínuo
+  const heat = u.pct_consumed != null ? u.pct_consumed : (BLOCO_S - remaining) / BLOCO_S; // fallback: fração decorrida do bloco
+  return { b, u, remaining, cost, heat, pct: u.pct_consumed };
+}
+function islandPillHTML(st) {
+  if (!ISLAND.data) return `<span class="isl-dot"></span><span class="isl-txt muted">uso…</span>`;
+  if (!st) return `<span class="isl-dot"></span><span class="isl-txt">sem bloco ativo</span><span class="isl-cost muted"> · —</span>`;
+  const pct = st.pct != null ? `<span class="isl-pct">${Math.round(st.pct * 100)}% · </span>` : '';
+  return `<span class="isl-dot ${heatClass(st.heat)}"></span>${pct}<span class="isl-cost">${custo(st.cost)}</span><span class="isl-time"> · <span class="isl-lbl">reset em </span>${fmtCountdown(st.remaining)}</span>`;
+}
+// Atualiza a pill (sempre) e os elementos vivos do painel (se estiver montado no Dashboard).
+function paintIsland() {
+  const el = $('#island'); if (!el) return;
+  const st = islandState();
+  el.innerHTML = islandPillHTML(st);
+  el.classList.remove('h-ok', 'h-warn', 'h-danger', 'h-none');
+  el.classList.add(st ? 'h-' + heatClass(st.heat) : 'h-none');
+  const ring = $('#isl-ring-time');
+  if (ring && st) {
+    ring.textContent = fmtCountdown(st.remaining);
+    const fg = $('#isl-ring-fg');
+    if (fg) { const f = Math.min(1, Math.max(0, (BLOCO_S - st.remaining) / BLOCO_S)); fg.style.strokeDashoffset = ISL_C * (1 - f); }
+    const cs = $('#isl-cost-stat'); if (cs) cs.textContent = custo(st.cost);
+  }
+}
+function usageSparkline(spark) {
+  if (!spark || !spark.length) return '<div class="muted" style="font-size:11px">sem série de burn</div>';
+  const w = 100, h = 28, bw = w / spark.length;
+  const max = Math.max(...spark.map((s) => s.cost).filter((c) => c != null), 0) || 1;
+  const baseline = `<line x1="0" y1="${h - 0.5}" x2="${w}" y2="${h - 0.5}" class="spk-base"/>`;
+  const bars = spark.map((s, i) => {
+    const x = (i * bw).toFixed(1), bwid = (bw * 0.72).toFixed(1);
+    // janela sem custo conhecido: tick de 1px no baseline (série contínua, não marcas soltas)
+    if (s.cost == null) return `<rect x="${x}" y="${h - 1}" width="${bwid}" height="1" class="spk-empty"/>`;
+    const bh = Math.max(1, (s.cost / max) * h);
+    return `<rect x="${x}" y="${(h - bh).toFixed(1)}" width="${bwid}" height="${bh.toFixed(1)}" rx="0.5" class="spk-bar"><title>${usd(s.cost)}</title></rect>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" class="isl-spark" preserveAspectRatio="none" aria-label="Burn das últimas 2h">${baseline}${bars}</svg>`;
+}
+function usageHistory(history) {
+  if (!history || !history.length) return '<div class="muted" style="font-size:11px">sem histórico</div>';
+  const order = modelOrder(history); // maior total → primeiro (fica embaixo na pilha)
+  // Agrega por dia e por rótulo (excedente já mapeado p/ 'outros'), somando colisões.
+  const byDay = {};
+  for (const r of history) { const d = (byDay[r.dia] = byDay[r.dia] || {}); const l = labelOf(r.model, order); d[l] = (d[l] || 0) + (r.tokens || 0); }
+  const dias = Object.keys(byDay).sort().slice(-14);
+  const totalDia = (d) => Object.values(byDay[d]).reduce((a, t) => a + t, 0);
+  const maxTok = Math.max(...dias.map(totalDia), 1);
+  const W = 280, H = 84, bw = W / dias.length;
+  const bars = dias.map((d, i) => {
+    let y = H;
+    return order.filter((m) => byDay[d][m]).map((m) => { const t = byDay[d][m]; const hh = (t / maxTok) * (H - 2); y -= hh; return `<rect x="${(i * bw + 2).toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - 4).toFixed(1)}" height="${hh.toFixed(1)}" fill="${colorFor(m, order)}" rx="1"><title>${esc(d)} · ${esc(m)} · ${tok(t)} tok (${Math.round(t / totalDia(d) * 100)}%)</title></rect>`; }).join('');
+  }).join('');
+  const legend = order.map((m) => `<span class="isl-leg"><i style="background:${colorFor(m, order)}"></i>${esc(m)}</span>`).join('');
+  return `<div class="isl-hist">
+    <div class="isl-hist-ymax">máx/dia ${tok(maxTok)} tok</div>
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="isl-hbars">${bars}</svg>
+    <div class="isl-hist-x"><span>${esc(dias[0] || '')}</span><span>${esc(dias.at(-1) || '')}</span></div>
+    <div class="isl-legend">${legend}</div></div>`;
+}
+// Painel "Uso" no Dashboard. Renderiza do cache do ISLAND (evita 2º fetch); vazio → estado vazio, nunca charts zerados.
+function usagePanel() {
+  const u = ISLAND.data;
+  const head = `<div class="section-head"><h2>Uso — bloco de 5h <span class="pill">estimado</span></h2></div>`;
+  if (!u) return `<section id="usage-panel">${head}<div class="surface" style="padding:16px"><span class="muted">carregando…</span></div></section>`;
+  if (!u.block) return `<section id="usage-panel">${head}${emptyState('clock', 'Nenhum bloco de uso ativo', 'Sessão ainda não iniciada — nenhuma atividade do Claude Code nas últimas 5h.')}</section>`;
+  const st = islandState();
+  const f = Math.min(1, Math.max(0, (BLOCO_S - st.remaining) / BLOCO_S));
+  const totalHoje = u.cost_today ?? null; // custo do dia vem agregado do backend (history não carrega mais cost)
+  const ring = `<svg viewBox="0 0 120 120" class="isl-ringsvg h-${heatClass(st.heat)}">
+    <circle cx="60" cy="60" r="${ISL_R}" class="ring-bg"/>
+    <circle cx="60" cy="60" r="${ISL_R}" id="isl-ring-fg" class="ring-fg" style="stroke-dasharray:${ISL_C.toFixed(1)};stroke-dashoffset:${(ISL_C * (1 - f)).toFixed(1)}"/>
+    <text x="60" y="58" text-anchor="middle" class="ring-time" id="isl-ring-time">${fmtCountdown(st.remaining)}</text>
+    <text x="60" y="76" text-anchor="middle" class="ring-sub">restante</text></svg>`;
+  const stats = [
+    ['Custo', `<b id="isl-cost-stat">${custo(st.cost)}</b>`],
+    ['Tokens', `<b>${tok(st.b.tokens)}</b>`],
+    ['$/h burn', `<b>${custo(st.b.burn_rate_hr)}</b>`],
+    ['Projeção do bloco', `<b>${custo(st.b.projected)}</b>`],
+    ['Total do dia', `<b>${custo(totalHoje)}</b>`],
+  ].map(([k, v]) => `<div class="isl-stat"><span class="lbl">${k}</span>${v}</div>`).join('');
+  return `<section id="usage-panel">${head}
+    <div class="surface isl-body">
+      <div class="isl-ringwrap">${ring}</div>
+      <div class="isl-right">
+        <div class="isl-stats">${stats}</div>
+        <div class="isl-spark-wrap"><span class="isl-cap">Burn últimas 2h</span>${usageSparkline(u.spark)}</div>
+        <div class="isl-hist-wrap"><span class="isl-cap">14 dias por modelo · tokens</span>${usageHistory(u.history)}</div>
+      </div>
+    </div>
+    <p class="muted" style="font-size:11px;margin-top:6px">${ic('alert')} Custo estimado por rates locais (settings) — pode diferir da fatura. Só enxerga sessões dos caminhos escaneados.</p>
+  </section>`;
 }
 
 /* ---------- Sessions ---------- */
@@ -425,13 +564,17 @@ function appendLiveLines(body, lines) {
 }
 
 /* ---------- generic card page ---------- */
-async function cardPage(endpoint, title, subtitle, renderCard, action = '') {
+async function cardPage(endpoint, title, subtitle, renderCard, action = '', filterFn = null, filterLabel = '', emptyCta = scanCta, emptyHint = '') {
   const data = await api(endpoint);
-  const items = Array.isArray(data) ? data : data.installed;
-  const recs = data.recommendations
+  let items = Array.isArray(data) ? data : data.installed;
+  const filtrando = filterFn && filterLabel;
+  if (filtrando) items = items.filter((it) => filterFn(it, filters));
+  const chip = filtrando ? `<div class="filter-chip"><span class="pill accent">${ic('search')}${esc(filterLabel)}</span><button class="link-btn" data-clear-filter>limpar</button></div>` : '';
+  const recs = data.recommendations && !filtrando
     ? `<h2>Recomendações rule-based</h2><div class="cards">${data.recommendations.map((x) => `<div class="card rise"><div class="card-head"><h3><span class="card-icon">${ic('spark')}</span>${esc(x.name)}</h3><span class="score"><span class="bar"><i style="width:${Math.round((x.score || 0) * 100)}%"></i></span>${Math.round((x.score || 0) * 100)}</span></div><p>${esc(x.reason)}</p></div>`).join('')}</div>`
     : '';
-  return shell(title, subtitle, `<div class="${items.length ? 'cards' : 'surface'}">${items.length ? items.map(renderCard).join('') : emptyState('search', 'Nada detectado', `Nenhum item de ${title.toLowerCase()} foi encontrado nos caminhos configurados.`, scanCta)}</div>${recs}`, action);
+  const vazio = filtrando ? emptyState('search', 'Nenhum resultado para o filtro', 'Nenhum item corresponde ao filtro ativo. Limpe o filtro para ver todos.') : emptyState('search', 'Nada detectado', emptyHint || `Nenhum item de ${title.toLowerCase()} foi encontrado nos caminhos configurados.`, emptyCta);
+  return shell(title, subtitle, `${chip}<div class="${items.length ? 'cards' : 'surface'}">${items.length ? items.map(renderCard).join('') : vazio}</div>${recs}`, action);
 }
 const SKILL_CAT = [[/ui|design|polish/i, 'UI / Design', 'design'], [/alm|finance|report|dashboard|dv01/i, 'ALM / Finance', 'chart'], [/review|pr|commit/i, 'Code Review', 'shield'], [/test|verify/i, 'Testing', 'check'], [/hook/i, 'Hooks', 'hooks'], [/prompt|context/i, 'Prompting', 'chat'], [/cost|token|optim/i, 'Cost', 'droplet'], [/session|parser|scan/i, 'Session Parsing', 'sessions']];
 function skillCat(s) { const hay = `${s.name} ${s.description || ''}`; return SKILL_CAT.find(([re]) => re.test(hay)) || [, 'Skill', 'book']; }
@@ -466,12 +609,24 @@ function subagentCard(x) {
 }
 
 /* ---------- Prompt queue ---------- */
-function promptCard(x) { return `<div class="card rise"><div class="card-head"><h3><span class="card-icon">${ic('prompts')}</span>${esc(x.title)}</h3><span class="pill ${x.priority === 'high' ? 'warning' : 'accent'}">${esc(x.priority)}</span></div><p>${esc(x.body || 'Sem corpo')}</p><div><span class="pill">${esc(x.target)}</span><span class="pill">${esc(x.status)}</span>${x.project ? `<span class="pill">${esc(x.project)}</span>` : ''}</div></div>`; }
+const PROMPT_NEXT = { draft: 'queued', queued: 'done', done: 'queued' };
+function promptCard(x) {
+  const done = x.status === 'done';
+  const nextLabel = done ? 'Reabrir' : x.status === 'queued' ? 'Concluir' : 'Enfileirar';
+  const opt = (v, cur) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${v}</option>`;
+  return `<div class="card rise${done ? ' done' : ''}" data-id="${x.id}">
+    <div class="card-head"><h3><span class="card-icon">${ic('prompts')}</span>${esc(x.title)}</h3><span class="pill ${x.priority === 'high' ? 'warning' : 'accent'}">${esc(x.priority)}</span></div>
+    <p>${esc(x.body || 'Sem corpo')}</p>
+    <div><span class="pill">${esc(x.target)}</span><span class="pill ${done ? '' : 'accent'}">${esc(x.status)}</span>${x.project ? `<span class="pill">${esc(x.project)}</span>` : ''}</div>
+    <div class="card-actions"><button class="link-btn" data-act="adv" data-next="${PROMPT_NEXT[x.status] || 'queued'}">${nextLabel}</button><button class="link-btn" data-act="edit">Editar</button><button class="link-btn danger" data-act="del">Excluir</button></div>
+    <form class="form edit-form" hidden data-editid="${x.id}"><input name="title" value="${esc(x.title)}" required><textarea name="body">${esc(x.body || '')}</textarea><div class="ds-row"><select name="target">${['either', 'codex', 'claude'].map((t) => opt(t, x.target)).join('')}</select><select name="priority">${['low', 'medium', 'high'].map((p) => opt(p, x.priority)).join('')}</select><button class="primary">Salvar</button></div></form>
+  </div>`;
+}
 async function prompts() {
   const data = await api('/api/prompts');
   const form = `<form class="form" id="prompt-form"><label>Novo prompt</label><input name="title" placeholder="Título" required><textarea name="body" placeholder="Prompt"></textarea><div class="ds-row"><select name="target"><option value="either">Claude ou Codex</option><option value="codex">Codex</option><option value="claude">Claude Code</option></select><select name="priority"><option value="medium">Prioridade média</option><option value="high">Alta</option><option value="low">Baixa</option></select><button class="primary">Adicionar à fila</button></div></form>`;
-  const queue = data.length ? `<div class="cards">${data.map(promptCard).join('')}</div>` : `<div class="surface">${emptyState('prompts', 'Fila vazia', 'Prompts adicionados aparecem aqui, prontos para enviar ao Codex ou Claude Code.')}</div>`;
-  return shell('Prompt Queue', 'Prepare trabalho antes de enviar aos agentes.', `${form}<h2>Fila (${data.length})</h2>${queue}`);
+  const queue = data.length ? `<div class="cards">${data.map(promptCard).join('')}</div>` : `<div class="surface">${emptyState('prompts', 'Fila vazia', 'Prompts adicionados aparecem aqui, prontos para enviar ao Codex ou Claude Code.', `<button class="primary" data-focus-prompt>${ic('prompts')}Criar primeiro prompt</button>`)}</div>`;
+  return shell('Prompt Queue', 'Prepare trabalho antes de enviar aos agentes.', `${form}<h2>Fila (${data.length})</h2><div id="queue">${queue}</div>`);
 }
 
 /* ---------- Settings ---------- */
@@ -601,7 +756,7 @@ async function render(quiet) {
   LIVE.stop(); kbRow = -1;
   VT.cleanup?.(); VT.cleanup = null; VT.container = null; // remove scroll listener da render anterior
   const savedY = quiet && page === 'sessions' ? window.scrollY : null; // auto-refresh preserva posição
-  document.querySelectorAll('.nav').forEach((b) => b.classList.toggle('active', b.dataset.page === page));
+  document.querySelectorAll('.nav').forEach((b) => { const on = b.dataset.page === page; b.classList.toggle('active', on); if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
   if (!quiet) $('#app').innerHTML = skeletonFor(page);
   try {
     let html;
@@ -609,9 +764,11 @@ async function render(quiet) {
     else if (page === 'live') html = await livePage();
     else if (page === 'studio') html = await studio();
     else if (page === 'sessions') html = await sessions();
-    else if (page === 'projects') html = await cardPage('/api/projects', 'Projetos', 'Sessões agrupadas por repositório.', projectCard);
-    else if (page === 'skills') html = await cardPage('/api/skills', 'Skills Finder', 'Skills instaladas e lacunas detectadas — como um App Store de skills.', skillCard);
-    else if (page === 'hooks') html = await cardPage('/api/hooks', 'Hooks', 'Somente inspeção. Templates não são ativados automaticamente.', hookCard);
+    else if (page === 'projects') html = await cardPage('/api/projects', 'Projetos', 'Sessões agrupadas por repositório.', projectCard, '', filters.missing_agents ? (p) => !p.agents_md : null, filters.missing_agents ? 'sem AGENTS.md' : '');
+    else if (page === 'skills') html = await cardPage('/api/skills', 'Skills Finder', 'Skills instaladas e lacunas detectadas — como um App Store de skills.', skillCard, '', filters.q ? (s, f) => `${s.name} ${s.description || ''}`.toLowerCase().includes(f.q.toLowerCase()) : null, filters.q ? `“${filters.q}”` : '');
+    else if (page === 'hooks') html = await cardPage('/api/hooks', 'Hooks', 'Somente inspeção. Templates não são ativados automaticamente.', hookCard, '', (filters.q || filters.template) ? (h, f) => (!f.q || `${h.event} ${h.matcher || ''} ${h.description || ''}`.toLowerCase().includes(f.q.toLowerCase())) && (!f.template || `${h.event} ${h.matcher || ''} ${h.description || ''} ${h.source_path || ''}`.toLowerCase().includes(f.template.toLowerCase())) : null, filters.template ? `template ${filters.template}` : filters.q ? `“${filters.q}”` : '',
+      `<button class="primary" data-goto="settings">${ic('settings')}Conferir caminhos</button>`,
+      'Nenhum hook detectado nos caminhos configurados. Confira os hook paths em Settings — o guia vive em docs/hooks.md e os templates em templates/claude/hooks.');
     else if (page === 'agents') html = await cardPage('/api/subagents', 'Multiagents', 'Definições locais de subagentes.', subagentCard);
     else if (page === 'prompts') html = await prompts();
     else if (page === 'design') html = designSystem();
@@ -640,14 +797,39 @@ function bind() {
   document.querySelectorAll('[data-session-open]').forEach((b) => { b.onclick = (e) => { e.stopPropagation(); detail(b.dataset.sessionOpen); }; });
   document.querySelectorAll('[data-term-copy]').forEach((b) => { b.onclick = (e) => { e.stopPropagation(); const t = b.closest('.term-panel')?.querySelector('[data-copy]')?.dataset.copy || ''; copy(t, b); }; });
   document.querySelectorAll('[data-copy-path]').forEach((b) => { b.onclick = () => copy(b.dataset.copyPath, b); });
+  $('[data-clear-filter]')?.addEventListener('click', () => goto(page, {}));
+  $('[data-focus-prompt]')?.addEventListener('click', () => { const i = $('#prompt-form input[name=title]'); i?.scrollIntoView({ behavior: 'smooth', block: 'center' }); i?.focus(); });
   $('#glass-toggle')?.addEventListener('click', () => { setGlass(document.documentElement.dataset.glass === 'off'); render(); });
-  const escanear = async (b, full) => { b.disabled = true; const t = b.innerHTML; b.textContent = full ? 'Reindexando…' : 'Escaneando…'; try { const r = await api('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ full }) }); b.textContent = `${r.indexados} indexadas · ${r.erros} erros`; setTimeout(() => { b.disabled = false; b.innerHTML = t; render(); }, 1600); } catch (err) { b.disabled = false; b.innerHTML = t; alert(err.message); } };
+  const escanear = async (b, full) => { b.disabled = true; const t = b.innerHTML; b.textContent = full ? 'Reindexando…' : 'Escaneando…'; try { const r = await api('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ full }) }); b.textContent = `${r.indexados} indexadas · ${r.erros} erros`; setTimeout(() => { b.disabled = false; b.innerHTML = t; render(); }, 1600); } catch (err) { b.disabled = false; b.innerHTML = t; toast(err.message, 'failed'); } };
   $('#scan')?.addEventListener('click', (e) => escanear(e.currentTarget, false));
   $('#scan-full')?.addEventListener('click', (e) => escanear(e.currentTarget, true));
   document.querySelector('[data-scan-cta]')?.addEventListener('click', (e) => escanear(e.currentTarget, false));
   let deb; $('#search')?.addEventListener('input', (e) => { clearTimeout(deb); const v = e.target.value; deb = setTimeout(() => { filters.q = v; goto(page, filters); }, 320); });
   $('#status')?.addEventListener('change', (e) => { filters.status = e.target.value; goto(page, filters); });
   $('#prompt-form')?.addEventListener('submit', async (e) => { e.preventDefault(); await api('/api/prompts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.fromEntries(new FormData(e.target))) }); render(); });
+  $('#queue')?.addEventListener('click', async (e) => {
+    const card = e.target.closest('[data-id]'); const btn = e.target.closest('[data-act]'); if (!card || !btn) return;
+    const id = card.dataset.id;
+    if (btn.dataset.act === 'del') {
+      // Confirmação two-step no próprio botão (DESIGN.md): 1º clique arma por 3s, 2º executa.
+      // O estado armado NÃO sobrevive a re-render (auto-refresh) — desarme implícito, aceitável.
+      if (!btn.dataset.armed) {
+        btn.dataset.armed = '1'; btn.classList.add('danger-armed');
+        const rotulo = btn.textContent; btn.textContent = 'Confirmar exclusão?';
+        setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.classList.remove('danger-armed'); btn.textContent = rotulo; } }, 3000);
+        return;
+      }
+      await api(`/api/prompts/${id}`, { method: 'DELETE' }); render();
+    }
+    else if (btn.dataset.act === 'adv') { await api(`/api/prompts/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: btn.dataset.next }) }); render(); }
+    else if (btn.dataset.act === 'edit') { card.querySelector('.edit-form')?.toggleAttribute('hidden'); }
+  });
+  $('#queue')?.addEventListener('submit', async (e) => {
+    if (!e.target.classList.contains('edit-form')) return;
+    e.preventDefault();
+    await api(`/api/prompts/${e.target.dataset.editid}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.fromEntries(new FormData(e.target))) });
+    render();
+  });
   $('#settings-form')?.addEventListener('submit', async (e) => { e.preventDefault(); const d = Object.fromEntries(new FormData(e.target)); const current = await api('/api/settings'); current.session_paths = { codex: d.codex.split('\n').filter(Boolean), claude: d.claude.split('\n').filter(Boolean) }; await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(current) }); render(); });
   if (page === 'studio') loadStudioQueue();
   if (page === 'live') startLive();
@@ -682,12 +864,18 @@ async function detail(id) {
       ${s.source_path ? `<p class="path">${esc(s.source_path)}</p>` : ''}</div>
       <div class="detail-body"><div class="meta">${meta.map(([k, v]) => `<div><span>${k}</span><b>${esc(v)}</b></div>`).join('')}</div>
       ${(s.warnings || []).length ? `<div class="chips">${s.warnings.map((w) => `<span class="pill warning">${ic('alert')}${esc(w)}</span>`).join('')}</div>` : ''}
-      <div class="tabs">${TABS.map(([k, l, g]) => `<button data-tab="${k}" class="${k === 'timeline' ? 'on' : ''}">${ic(g)}${l}${counts[k] != null ? `<span class="tc">${counts[k]}</span>` : ''}</button>`).join('')}</div>
-      <div id="detail-tab"></div></div></div>`;
+      <div class="tabs" role="tablist" aria-label="Detalhe da sessão">${TABS.map(([k, l, g]) => `<button data-tab="${k}" role="tab" aria-selected="${k === 'timeline'}" class="${k === 'timeline' ? 'on' : ''}">${ic(g)}${l}${counts[k] != null ? `<span class="tc">${counts[k]}</span>` : ''}</button>`).join('')}</div>
+      <div id="detail-tab" role="tabpanel"></div></div></div>`;
     renderTab();
-    $('#detail-content').querySelectorAll('[data-tab]').forEach((btn) => { btn.onclick = () => { detailState.tab = btn.dataset.tab; $('#detail-content').querySelectorAll('[data-tab]').forEach((x) => x.classList.toggle('on', x === btn)); renderTab(); }; });
+    const abas = [...$('#detail-content').querySelectorAll('[data-tab]')];
+    const ativar = (btn) => { detailState.tab = btn.dataset.tab; abas.forEach((x) => { x.classList.toggle('on', x === btn); x.setAttribute('aria-selected', String(x === btn)); }); renderTab(); };
+    abas.forEach((btn, i) => {
+      btn.onclick = () => ativar(btn);
+      // Setas ←/→ movem a aba (padrão tablist); escopado ao foco no tab, sem colidir com j/k global.
+      btn.onkeydown = (e) => { if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return; e.preventDefault(); const alvo = abas[(i + (e.key === 'ArrowRight' ? 1 : -1) + abas.length) % abas.length]; alvo.focus(); ativar(alvo); };
+    });
     $('#detail').showModal();
-  } catch (e) { alert(e.message); }
+  } catch (e) { toast(e.message, 'failed'); }
 }
 function renderTab() {
   const { s, tab } = detailState; const host = $('#detail-tab'); if (!host) return;
@@ -735,7 +923,7 @@ function renderTab() {
 const runCommand = async () => { const r = await api('/api/command', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: $('#command-input').value }) }); const f = r.filters || {}; if (r.query) f.q = r.query; goto(r.page || 'sessions', f); };
 $('#command-input').onkeydown = (e) => { if (e.key === 'Enter') runCommand(); };
 const palette = $('#palette');
-const paletteScan = async () => { try { const r = await api('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); render(); alert(`${r.indexados} indexadas · ${r.erros} erros`); } catch (e) { alert(e.message); } };
+const paletteScan = async () => { try { const r = await api('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); render(); toast(`${r.indexados} indexadas · ${r.erros} erros`, 'info'); } catch (e) { toast(e.message, 'failed'); } };
 function paletteItems() {
   return [
     ...nav.map(([label, id, icon]) => ({ label, icon, hint: 'ir para', run: () => goto(id) })),
@@ -767,6 +955,10 @@ $('#command').onclick = () => $('#command-input').focus();
 window.addEventListener('hashchange', () => { readHash(); render(); });
 $('#theme').onclick = () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 $('#palette-btn').onclick = openPalette;
+// Pill de uso → abre o painel no Dashboard. ISLAND vive fora do #app (topbar), logo
+// tem seu próprio lifecycle e NÃO é reiniciado pelo render()/LIVE.stop() a cada navegação.
+$('#island').onclick = () => { goto('dashboard'); setTimeout(() => $('#usage-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80); };
+ISLAND.start();
 let kbRow = -1; let gPending = false;
 const GCHORD = { d: 'dashboard', l: 'live', t: 'studio', s: 'sessions', p: 'projects', k: 'skills', h: 'hooks', a: 'agents', q: 'prompts' };
 function highlightRow(rows) { rows.forEach((r) => r.classList.remove('kb')); const r = rows[kbRow]; if (r) { r.classList.add('kb'); r.scrollIntoView({ block: 'nearest' }); } }
@@ -776,6 +968,7 @@ addEventListener('keydown', (e) => {
   const busy = $('#detail').open || palette.open;
   if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) { e.preventDefault(); openPalette(); return; }
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === 'Escape') { document.querySelectorAll('.danger-armed').forEach((b) => { delete b.dataset.armed; b.classList.remove('danger-armed'); b.textContent = 'Excluir'; }); return; }
   if (e.key === '/') { e.preventDefault(); $('#command-input').focus(); return; }
   if (gPending) { gPending = false; if (GCHORD[e.key]) { e.preventDefault(); goto(GCHORD[e.key]); } return; }
   if (e.key === 'g' && !busy) { gPending = true; setTimeout(() => { gPending = false; }, 700); return; }

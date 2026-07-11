@@ -122,6 +122,42 @@ Glass is a **progressive enhancement layer**, CSS-first.
 Keep helpers small and pure (data → HTML string). Escape all interpolated data
 with `esc()`. One helper, one job.
 
+## Feedback & confirmation patterns
+
+- **Native browser dialogs are banned.** No `alert()`, no `confirm()`, no
+  `prompt()` — ever. Gate: `grep -F "alert(" public/app.js` → 0.
+- **Toast is the only async feedback channel** (`toast(msg, kind)` with kinds
+  `info`/`working`/`needs_input`/`failed`). Rules:
+  - button-triggered mutation: keep the inline text-in-button progress AND
+    toast only on error;
+  - palette actions: always toast (success and error) — the palette closes
+    before the action runs, so the toast is never behind a backdrop.
+- **Destructive confirmation = two-step armed button.** First click arms the
+  button for 3s (`.danger-armed`, label "Confirmar exclusão?"), second click
+  executes; timeout or `Escape` disarms; a re-render implicitly disarms.
+  Markup: the same button, `data-armed` via dataset — no extra dialog, no
+  dependency. White-on-`--st-failed` meets AA.
+
+## ARIA contract (dynamic components)
+
+- Toast host: `role="status" aria-live="polite"` (set at creation in `toast()`).
+- Sortable headers (`th()`): `aria-sort="ascending|descending|none"` kept in
+  sync with `filters.dir`.
+- Detail tabs: `role="tablist"` on the container, `role="tab"` +
+  `aria-selected` on buttons, `role="tabpanel"` on the pane; ←/→ move and
+  activate tabs (handlers scoped to the focused tab — never global).
+- Sidebar nav: active item carries `aria-current="page"` (toggled in `render()`).
+- Dialogs use `showModal()` (native focus trap + Esc); do not reimplement.
+
+## Spacing-token rule
+
+`--s1..--s7` govern **layout rhythm**: grid gaps between cards/sections,
+section margins, `main`/`topbar` paddings. Literal px is deliberate for
+hairlines (1px), icon/avatar dimensions, radii, font sizes, and
+component-internal spacing (a pill's padding is the component's intrinsic
+size, not page rhythm). Never swap a px for a token of a *different* value —
+that's a visual change disguised as a refactor. Full map: `docs/AUDIT-frontend.md`.
+
 ## What NOT to do
 
 - No neon, no cyberpunk, no heavy gradients, no drop shadows everywhere.

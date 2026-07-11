@@ -26,18 +26,24 @@ Status legend: ✅ done · 🔜 next · 🔭 later.
   fuzzy session jump.
 - Per-page loading skeletons; friendly error state with retry.
 
+## Shipped (second cycle) ✅
+
+1. **Virtualized sessions table** — manual windowing (`#vrows`, fixed row height),
+   no library; smooth past 1k rows.
+2. **Keyboard-first nav** — `j/k` + `Enter` on the session list (works windowed),
+   `g d`/`g l`/`g s`… chords, `⌘K` palette, `/` focuses the command bar.
+3. **Notifications** — toast when a session flips to `needs_input`/`failed`
+   (click opens the detail).
+4. **Diff viewer** — side-by-side toggle for Edit events on top of the
+   line-level coloring.
+5. **Per-page empty states with a primary action** — sessions/projects/skills →
+   Reescanear; hooks → "Conferir caminhos" (Settings) + pointer to
+   `docs/hooks.md`; prompt queue → "Criar primeiro prompt" (focuses the form);
+   filtered card pages → "limpar" chip.
+
 ## 🔜 Next (high value, low/med effort)
 
-1. **Virtualize the sessions table.** At 300+ rows it's fine; past ~1k, window
-   the rows (simple manual windowing, no library) to keep scroll smooth. *Med.*
-2. **Keyboard-first nav.** `j/k` to move the session list, `Enter` to open,
-   `g d`/`g l`/`g s` chords for pages (Linear-style). *Med.*
-3. **Notifications.** When a watched session flips to `needs_input`/`failed`,
-   surface a toast (opt-in Notification API). *Small.*
-4. **Diff viewer polish.** Side-by-side (old/new) toggle for Edit events,
-   collapsible hunks, word-level intra-line highlighting. *Med.*
-5. **Hooks empty-state action** → "abrir docs/hooks.md"; per-page empties with a
-   primary action. *Small.*
+*(empty — pick from Later as needed)*
 
 ## 🔭 Later (bigger or needs backend)
 

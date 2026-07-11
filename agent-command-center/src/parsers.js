@@ -1,10 +1,25 @@
 import { basename, dirname } from 'node:path';
 
-const SEGREDO = /((?:api[_-]?key|token|secret|password|authorization)["'\s:=]+)([^\s,"'}]+)/gi;
-const CHAVE = /\b(?:sk|ghp|github_pat|xox[baprs])[-_A-Za-z0-9]{12,}\b/g;
+const SEGREDO = /((?:api[_-]?key|token|secret|password|authorization|bearer|client[_-]?secret|aws_secret_access_key|private[_-]?key)["'\s:=]+)([^\s,"'}]+)/gi;
+// Cada alternativa é auto-contida (âncoras próprias) para não vazar o sufixo de
+// comprimento entre elas — evita afrouxar a regra original sk/ghp e falso-positivar.
+const CHAVE = new RegExp([
+  /\b(?:sk|ghp|github_pat|xox[baprs])[-_A-Za-z0-9]{12,}\b/,          // OpenAI/GitHub/Slack (original)
+  /\bxapp-\d-[A-Za-z0-9-]{10,}\b/,                                    // Slack app token
+  /\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b/,                 // Stripe
+  /\b(?:AKIA|ASIA|AGPA|AIDA|AROA)[A-Z0-9]{16}\b/,                    // AWS access key id
+  /\bAIza[0-9A-Za-z_-]{35}\b/,                                        // Google API key
+  /\bGOCSPX-[A-Za-z0-9_-]{20,}\b/,                                    // Google OAuth secret
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/ // JWT
+].map((r) => r.source).join('|'), 'g');
+// Bloco de chave privada PEM (multi-linha) — colapsa inteiro.
+const PEM = /-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z ]+ )?PRIVATE KEY-----/g;
 
 export function redigir(valor = '') {
-  return String(valor).replace(SEGREDO, '$1[REDACTED]').replace(CHAVE, '[REDACTED]');
+  return String(valor)
+    .replace(PEM, '[REDACTED PRIVATE KEY]')
+    .replace(SEGREDO, '$1[REDACTED]')
+    .replace(CHAVE, '[REDACTED]');
 }
 
 function texto(conteudo) {
@@ -119,8 +134,7 @@ export function normalizar_evento(registro, posicao) {
   return {
     position: posicao,
     timestamp: registro?.timestamp || payload?.timestamp || null,
-    kind: String(kind), role, summary,
-    raw: redigir(JSON.stringify(registro)).slice(0, 10_000)
+    kind: String(kind), role, summary
   };
 }
 
@@ -176,13 +190,52 @@ function extrair_usage(registros) {
   return null;
 }
 
+// Série temporal de usage por mensagem — base para bloco 5h e burn rate.
+// Claude-only por design: só as mensagens assistant do Claude trazem
+// message.usage COM timestamp por mensagem. O token_count do Codex é cumulativo
+// e sem timestamp confiável por delta, então fica fora do bloco (mesmo teto do
+// claude-island original, que também só cobre Claude Code).
+export function serie_de_usage(registros) {
+  const serie = [];
+  for (const r of registros) {
+    const u = r?.message?.usage;
+    if (!u || typeof u !== 'object' || !r.timestamp) continue;
+    serie.push({
+      ts: r.timestamp,
+      input: u.input_tokens || 0,
+      output: u.output_tokens || 0,
+      cache_read: u.cache_read_input_tokens || 0,
+      cache_write: u.cache_creation_input_tokens || 0,
+      model: r.message.model || null
+    });
+  }
+  return serie;
+}
+
+// Tokens agregados por modelo DENTRO de uma sessão (sessões trocam de modelo no
+// meio). Claude-only: só message.usage traz tokens+model por mensagem. Codex não
+// tem usage por-mensagem → retorna {} e o caller cai no fallback sessions.model.
+// Invariante: Σ dos valores == extrair_usage(...).total para sessões Claude.
+export function tokens_por_modelo(registros) {
+  const por = {};
+  for (const r of registros) {
+    const u = r?.message?.usage;
+    if (!u || typeof u !== 'object') continue;
+    const m = r.message.model || null;
+    if (!m) continue; // sem modelo na mensagem → não inventa rótulo
+    por[m] = (por[m] || 0) + (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+  }
+  return por;
+}
+
 export function analisar_jsonl(conteudo, arquivo, stats, origem_forcada) {
   const avisos = [];
   const registros = [];
-  for (const [indice, linha] of conteudo.split(/\r?\n/).entries()) {
+  const linhas = conteudo.split(/\r?\n/);
+  for (const [indice, linha] of linhas.entries()) {
     if (!linha.trim()) continue;
     try { registros.push(JSON.parse(linha)); }
-    catch { if (indice < conteudo.split(/\r?\n/).length - 2) avisos.push(`Linha ${indice + 1} inválida`); }
+    catch { if (indice < linhas.length - 2) avisos.push(`Linha ${indice + 1} inválida`); }
   }
   const meta_registro = registros.find((r) => r?.type === 'session_meta');
   const meta = meta_registro?.payload || {};
@@ -201,6 +254,7 @@ export function analisar_jsonl(conteudo, arquivo, stats, origem_forcada) {
   }))].slice(0, 50);
   const files = arquivos_de_tools(registros);
   const usage = extrair_usage(registros);
+  const model_tokens = tokens_por_modelo(registros);
   return {
     id: meta.id || registros.find((r) => r?.sessionId)?.sessionId || basename(arquivo, '.jsonl'),
     source: origem, source_path: arquivo, project_path,
@@ -209,7 +263,7 @@ export function analisar_jsonl(conteudo, arquivo, stats, origem_forcada) {
     model: registros.find((r) => r?.type === 'turn_context')?.payload?.model || meta.model || registros.find((r) => r?.message?.model)?.message?.model || registros.find((r) => r?.model)?.model || null,
     effort: registros.find((r) => r?.payload?.effort)?.payload?.effort || null,
     created_at: criado_em, updated_at: atualizado_em,
-    tokens: usage?.total || null, usage, cost: null,
+    tokens: usage?.total || null, usage, cost: null, model_tokens,
     snippet: titulo(eventos.at(-1)?.summary || primeiro, 'not detected'),
     tools, files, warnings: avisos, events: eventos.slice(-500)
   };

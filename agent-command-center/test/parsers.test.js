@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { analisar_jsonl, redigir } from '../src/parsers.js';
+import { analisar_jsonl, redigir, serie_de_usage } from '../src/parsers.js';
 
 const stats = { birthtime: new Date('2026-01-01'), mtime: new Date('2026-01-02') };
 
@@ -11,9 +11,32 @@ test('parser Codex extrai metadados e redige segredo', () => {
   ].map(JSON.stringify).join('\n');
   const result = analisar_jsonl(input, 'C:\\Users\\me\\.codex\\sessions\\x.jsonl', stats);
   assert.equal(result.source, 'codex'); assert.equal(result.id, 'abc'); assert.match(result.title, /REDACTED/); assert.doesNotMatch(JSON.stringify(result), /secreto123/);
+  assert.ok(result.events.every((evento) => !('raw' in evento)), 'evento não persiste payload bruto');
 });
 
 test('redactor cobre chaves conhecidas', () => assert.equal(redigir('key sk-abcdefghijklmnop'), 'key [REDACTED]'));
+
+test('redação: corpus de segredos é redigido, prosa benigna sobrevive', () => {
+  const LEAKS = [
+    'AKIAIOSFODNN7EXAMPLE',
+    'AIzaSyD1234567890abcdefghijklmnopqrstuv',            // AIza + 35
+    'xapp-1-A012-345678901234-abcdef',
+    'sk_live_51H1234567890abcdefghij',
+    'GOCSPX-abcdefghijklmnopqrstuvwx',
+    'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.dozjgNryP4J3jVmNHl0w5N',
+    'aws_secret_access_key = wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY',
+    'Authorization: Bearer abcdef1234567890abcdef',
+    '-----BEGIN RSA PRIVATE KEY-----\nMIIBabcdef\n-----END RSA PRIVATE KEY-----'
+  ];
+  for (const s of LEAKS) assert.doesNotMatch(redigir(s), /AKIA|AIzaSy|xapp-1|sk_live|GOCSPX|eyJhbGci|wJalrXU|Bearer abcdef|BEGIN RSA/, `vazou: ${s}`);
+  // Benigno deve sobreviver intacto (guardas de comprimento + word-boundary):
+  for (const s of ['skateboard', 'tokenizer.js', 'src/secret-santa.ts', 'react.production.min.js']) assert.equal(redigir(s), s, `mutilou benigno: ${s}`);
+  // Idempotência: redigir 2× = redigir 1×.
+  const misto = 'usa AKIAIOSFODNN7EXAMPLE e sk_live_51H1234567890abcdefghij aqui';
+  assert.equal(redigir(redigir(misto)), redigir(misto));
+  // Label preservado (não colapsa o rótulo):
+  assert.match(redigir('token: abcdef1234567890'), /^token:\s*\[REDACTED\]$/);
+});
 
 test('tokens Claude: soma usage por mensagem (campos disjuntos)', () => {
   const msg = (i) => ({ type:'assistant', timestamp:`2026-01-01T00:0${i}:00Z`,
@@ -60,6 +83,24 @@ test('Claude tool_result is_error vira stderr', () => {
   ].map(JSON.stringify).join('\n');
   const r = analisar_jsonl(input, 'C:\\Users\\me\\.claude\\projects\\p\\x.jsonl', stats, 'claude');
   assert.equal(r.events.find((e) => e.summary.includes('boom')).kind, 'stderr');
+});
+
+test('serie_de_usage extrai ts+usage na ordem e ignora registros sem usage', () => {
+  const registros = [
+    { type:'assistant', timestamp:'2026-01-01T00:01:00Z', message:{ role:'assistant', model:'claude-sonnet-5', usage:{ input_tokens:10, output_tokens:5, cache_read_input_tokens:100, cache_creation_input_tokens:20 } } },
+    { type:'user', timestamp:'2026-01-01T00:02:00Z', message:{ role:'user', content:[{ type:'text', text:'sem usage' }] } },
+    { type:'assistant', timestamp:'2026-01-01T00:03:00Z', message:{ role:'assistant', model:'claude-opus-4-8', usage:{ input_tokens:1, output_tokens:2, cache_read_input_tokens:3, cache_creation_input_tokens:4 } } }
+  ];
+  const serie = serie_de_usage(registros);
+  assert.equal(serie.length, 2); // ignora o registro sem usage
+  assert.deepEqual(serie.map((e) => e.ts), ['2026-01-01T00:01:00Z', '2026-01-01T00:03:00Z']);
+  assert.equal(serie[0].input, 10); assert.equal(serie[0].cache_write, 20); assert.equal(serie[0].model, 'claude-sonnet-5');
+  assert.equal(serie[1].model, 'claude-opus-4-8');
+});
+
+test('serie_de_usage ignora usage sem timestamp confiável', () => {
+  const serie = serie_de_usage([{ type:'assistant', message:{ role:'assistant', usage:{ input_tokens:5, output_tokens:5 } } }]);
+  assert.equal(serie.length, 0);
 });
 
 test('Codex function_call_output desembrulha JSON e marca stderr por exit_code', () => {
